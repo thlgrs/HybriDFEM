@@ -5,17 +5,16 @@ Created on Wed Aug  7 17:24:23 2024
 @author: ibouckaert
 """
 
-import numpy as np
 import os
-import h5py
-import sys
 import pathlib
+import sys
+
+import numpy as np
 
 folder = pathlib.Path('C:/Users/ibouckaert/OneDrive - UCL/Bureau/UNIF/PhD/Coding/HybriDFEM 3.0/Objects')
 sys.path.append(str(folder))
 
 import Structure as st
-import Material as mat
 import Contact as cont
 
 save_path = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +39,6 @@ vertices = np.array([N2, N3, N5, N6, N4])
 St.add_block(vertices, 100.)
 
 St.make_nodes()
-St.make_cfs(True, nb_cps=2, offset = 0.0, contact=cont.NoTension(100,100))
+St.make_cfs(True, nb_cps=2, offset=0.0, contact=cont.NoTension(100, 100))
 
 St.plot_structure(plot_cf=True, scale=0)

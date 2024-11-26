@@ -5,11 +5,11 @@ Created on Wed Aug  7 17:24:23 2024
 @author: ibouckaert
 """
 
-import numpy as np
 import os
-import h5py
-import sys
 import pathlib
+import sys
+
+import numpy as np
 
 folder = pathlib.Path('C:/Users/ibouckaert/OneDrive - UCL/Bureau/UNIF/PhD/Coding/HybriDFEM 3.0/Objects')
 sys.path.append(str(folder))
@@ -25,7 +25,7 @@ N3 = np.array([3, 3], dtype=float)
 N4 = np.array([3, 0], dtype=float)
 
 H_B = .2
-H_C = .2 * 2**(1/3) 
+H_C = .2 * 2 ** (1 / 3)
 B = .2
 
 BLOCKS = 40
@@ -39,20 +39,24 @@ A = 0.0
 Lin_Geom = False
 FEs = False
 
-if Lin_Geom: text_lin_geom = 'Linear'
-else: text_lin_geom = 'P-Delta'
+if Lin_Geom:
+    text_lin_geom = 'Linear'
+else:
+    text_lin_geom = 'P-Delta'
 
-if FEs: text_fes = '_Coupled'
-else: text_fes = '_Full'
+if FEs:
+    text_fes = '_Coupled'
+else:
+    text_fes = '_Full'
 
 filename = f'Frame_BilinMat_' + text_lin_geom + text_fes
 
 St = st.Structure_2D()
 
-if FEs: 
+if FEs:
     St.add_fe(N1, N2, E, NU, H_C, b=B, lin_geom=Lin_Geom)
     St.add_fe(N3, N4, E, NU, H_C, b=B, lin_geom=Lin_Geom)
-else: 
+else:
     St.add_beam(N1, N2, BLOCKS, H_C, 100., b=B, material=mat.Bilin_Mat(E, NU, FY, A))
     St.add_beam(N3, N4, BLOCKS, H_C, 100., b=B, material=mat.Bilin_Mat(E, NU, FY, A))
 
@@ -66,14 +70,16 @@ F = 100e3
 St.loadNode(N2, [0], F)
 St.loadNode(N2, [1], -F, fixed=True)
 St.loadNode(N3, [1], -F, fixed=True)
-St.fixNode(N1, [0,1])
-St.fixNode(N4, [0,1])
+St.fixNode(N1, [0, 1])
+St.fixNode(N4, [0, 1])
 
 St.plot_structure(plot_cf=False, scale=0)
 
-if FEs: control_node = St.get_node_id(N2)
-else: control_node = BLOCKS-1  
-    
+if FEs:
+    control_node = St.get_node_id(N2)
+else:
+    control_node = BLOCKS - 1
+
 # St.solve_dispcontrol(65, 65e-3, control_node, 0, dir_name=save_path, filename=filename, tol=1)
 
 St.save_structure(f'Frame_BilinMat_' + text_lin_geom + text_fes)

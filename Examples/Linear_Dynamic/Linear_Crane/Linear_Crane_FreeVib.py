@@ -1,9 +1,8 @@
-import numpy as np
 import os
-import h5py
-import sys
 import pathlib
+import sys
 
+import numpy as np
 
 folder = pathlib.Path('C:/Users/ibouckaert/OneDrive - UCL/Bureau/UNIF/PhD/Coding/HybriDFEM 3.0/Objects')
 sys.path.append(str(folder))
@@ -48,11 +47,13 @@ F_ref = 500
 
 w_s = 10
 
-def excitation(x): return -np.sin(w_s*x) 
+
+def excitation(x): return -np.sin(w_s * x)
+
 
 # St.loadNode(N3, [1], F, fixed=True)
 St.loadNode(N3, [1], F_ref)
-St.fixNode(N1, [0,1,2])
+St.fixNode(N1, [0, 1, 2])
 # St.fixNode(N2, [1])
 
 

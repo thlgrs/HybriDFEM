@@ -6,9 +6,9 @@ Created on Wed Aug  7 17:24:23 2024
 """
 
 import numpy as np
-from Objects import Structure as st
-from Objects import Material as mat
 
+from Objects import Material as mat
+from Objects import Structure as st
 
 N1 = np.array([0, 0], dtype=float)
 N2 = np.array([3, 0], dtype=float)
@@ -31,12 +31,12 @@ St.make_cfs(True, nb_cps=CPS)
 F = -100e3
 
 St.loadNode(N2, [1], F)
-St.fixNode(N1, [0,1,2])
+St.fixNode(N1, [0, 1, 2])
 
 St.solve_linear()
 
-print(St.U[-2]*1000)
+print(St.U[-2] * 1000)
 
-St.plot_structure(plot_cf=False, scale=1 , save='linearBeam')
+St.plot_structure(plot_cf=False, scale=1, save='linearBeam')
 
 St.plot_stresses(save='linearBeamStress')

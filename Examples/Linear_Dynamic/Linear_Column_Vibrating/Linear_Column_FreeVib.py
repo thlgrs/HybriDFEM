@@ -5,13 +5,11 @@ Created on Wed Aug  7 17:24:23 2024
 @author: ibouckaert
 """
 
+import os
+import pathlib
+import sys
 
 import numpy as np
-import os
-import h5py
-import sys
-import pathlib
-
 
 folder = pathlib.Path('C:/Users/ibouckaert/OneDrive - UCL/Bureau/UNIF/PhD/Coding/HybriDFEM 3.0/Objects')
 sys.path.append(str(folder))
@@ -34,7 +32,7 @@ B = .1
 BLOCKS = 6
 CPS = 25
 
-E = 4*np.pi**2
+E = 4 * np.pi ** 2
 NU = 0.0
 
 St = st.Structure_2D()
@@ -46,7 +44,7 @@ St.make_cfs(True, nb_cps=CPS)
 F = -E * 1e-3
 
 St.loadNode(N2, [1], F, fixed=True)
-St.fixNode(N1, [0,1,2])
+St.fixNode(N1, [0, 1, 2])
 # St.fixNode(N2, [1])
 
 St.solve_linear()
@@ -58,5 +56,3 @@ U0 = St.U.copy()
 St.set_damping_properties(xsi=0.0, damp_type='STIFF')
 
 St.solve_dyn_linear(5, 1e-3, U0=U0, Meth=Meth)
-
-
