@@ -1,0 +1,23 @@
+# Ignore PyCharm project folder
+.idea/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+env/
+
+# Environment variable files
+.env
+
+# Logs
+*.log
+
+# png
+*.png
+
+# IDE files and folders
+.vscode/

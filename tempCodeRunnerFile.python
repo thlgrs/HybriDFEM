@@ -1,0 +1,46 @@
+infinitif = """aanbieden aandoen aankomen aannemen bedriegen beginnen begrijpen besluiten bevelen bestaan bewegen bezoeken bieden binden blijken blijven breken
+brengen buigen denken doen dragen drinken
+dwingen eten
+gaan genieten geven grijpen hangen hebben
+helpen heten houden kiezen kijken klimmen komen kopen
+krijgen kunnen lachen laten lezen liegen liggen lijden lijken lopen moeten
+mogen
+nemen
+onderzoeken ontbijten onthouden
+ontwerpen opheffen rijden
+roepen ruiken
+schijnen schrijven schrikken
+slaan slapen sluiten snijden spreken springen staan steken stelen sterven stijgen trekken vallen
+vangen
+varen vechten verbieden verdwijnen
+vergelijken vergeten verkopen verlaten verliezen verstaan vertrekken verzinnen vinden vliegen vragen wassen
+wegen weten wijzen willen winnen worden
+zeggen zenden zien
+zijn zingen zitten zoeken
+zwemmen zwijgen"""
+
+traduction = """offrir mettre, allumer arriver accepter, embaucher tromper
+commencer comprendre décider ordonner
+exister
+bouger, se mouvoir visiter offrir lier
+s'avérer, être évident
+rester
+casser
+apporter plier penser faire porter boire forcer manger aller
+profiter, jouir de donner
+saisir pendre avoir aider s'appeler tenir choisir regarder grimper venir acheter recevoir
+pouvoir (capacité, possibilité) rire laisser lire mentir être couché souffrir paraître, ressembler marcher, courir devoir pouvoir (permission) prendre étudier, examiner petit-déjeuner retenir concevoir soulever rouler appeler sentir, flairer briller, sembler écrire s'effrayer frapper dormir fermer couper parler sauter être debout piquer voler, dérober mourir augmenter, s'élever tirer, aller tomber attraper naviguer se battre interdire disparaître comparer oublier vendre quitter perdre comprendre partir imaginer trouver voler (air)
+demander laver peser savoir indiquer vouloir gagner devenir dire envoyer voir être chanter être assis chercher nager se taire"""
+
+
+import pandas as pd
+infinitif = infinitif.split()
+traduction = traduction.split()
+
+for inf in traduction:
+    print(inf)
+
+
+
+
+
