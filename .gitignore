@@ -19,5 +19,8 @@ env/
 # png
 *.png
 
+# eps
+*.eps
+
 # IDE files and folders
 .vscode/
