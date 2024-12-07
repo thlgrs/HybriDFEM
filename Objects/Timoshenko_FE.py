@@ -9,11 +9,12 @@ from copy import deepcopy
 
 import matplotlib.pyplot as plt
 import numpy as np
+from numpy import ndarray
 
 
 class Timoshenko_FE_2D:
 
-    def __init__(self, Node1, Node2, E, nu, b, h, lin_geom=True, rho=0.):
+    def __init__(self, Node1:ndarray[2], Node2:ndarray[2], E:float, nu:float, b:float, h:float, lin_geom=True, rho=0.):
 
         self.N1 = Node1
         self.N2 = Node2
