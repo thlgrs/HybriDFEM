@@ -42,3 +42,4 @@ class QuadElement(FE_2D):
             self.N5 = (node2 + node3)/2
             self.N6 = (node3 + node4)/2
             self.N7 = (node4 + node1)/2
+
