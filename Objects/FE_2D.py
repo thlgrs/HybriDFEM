@@ -2,7 +2,6 @@ import numpy as np
 import gmsh
 import meshio
 import matplotlib.pyplot as plt
-from ezdxf.lldxf.tags import group_tags
 from matplotlib.collections import LineCollection
 from scipy.spatial import KDTree
 from collections import deque
@@ -19,7 +18,48 @@ class Mesh:
         self.type = element_type
         self.element_size = element_size
         self.file = filename
-        self.groups  = 0
+        self.groups = 0
+
+    ### Basic methods: getter, setter, reader, generate, update
+    def add_point(self,x,y,regen=False):
+        gmsh.initialize()
+        gmsh.open(self.file)
+        gmsh.model.reset() # Clear everything geometry, physical groups and mesh
+        self.points_list.append((x,y))
+        if regen: self.generate_mesh() # Only 2 physical groups Boundary and Domain
+
+    def change_size(self, new_size,update=False):
+        self.element_size = new_size
+        if update: self.update_mesh() # Don't clear physical groups
+
+    def change_type(self, new_type, update=False):
+        self.type = new_type
+        if update: self.update_mesh() # Don't clear physical groups
+
+    def update_mesh(self):
+        gmsh.initialize()
+        gmsh.open(self.file)
+
+        # Clear the existing mesh
+        gmsh.model.mesh.clear()
+
+        # Update the characteristic length for all points
+        entities = gmsh.model.getEntities(0)  # Get all points (dimension 0)
+        for point in entities:
+            tag = point[1] #point[0] is the dimension of the entities
+            coord = gmsh.model.geo.getPoint(tag)  # Get current point coordinates
+            gmsh.model.geo.addPoint(coord[0], coord[1], coord[2], self.element_size, tag) # update element size
+
+        # Synchronize and regenerate the mesh
+        gmsh.model.geo.synchronize()
+        domain = self.get_physical_group_tag("Domain", 2)
+        if self.type == "quad":
+            gmsh.model.mesh.setRecombine(2, domain) # update the type
+        gmsh.model.mesh.generate(2)
+
+        gmsh.write(self.file)
+
+        gmsh.finalize()
 
     def generate_mesh(self):
         gmsh.initialize()
@@ -43,9 +83,9 @@ class Mesh:
         #--------------------------------------------------------------------------------------------
         gmsh.model.addPhysicalGroup(1, line_ids, 1)  # Physical group for boundary lines
         gmsh.model.addPhysicalGroup(2, [surface], 2)  # Physical group for the domain surface
-        gmsh.model.setPhysicalName(1, 1, "Boundary")
-        gmsh.model.setPhysicalName(2, 2, "Domain")
-        self.groups += 2 # 2 groups created Boundary and Domain
+        gmsh.model.setPhysicalName(1, 1, "Boundary") # Edge
+        gmsh.model.setPhysicalName(2, 2, "Domain")   # Domain
+        self.groups = 2 # 2 groups created Boundary and Domain
 
         gmsh.model.geo.synchronize()
         if self.type == "quad":
@@ -59,6 +99,7 @@ class Mesh:
     def read_mesh(self):
         return meshio.read(self.file)
 
+    ### Extraction methods ###
     def nodes(self):
         mesh = self.read_mesh()
         nodes = {i + 1: (coord[0], coord[1]) for i, coord in enumerate(mesh.points)}
@@ -106,6 +147,7 @@ class Mesh:
         plt.ylabel("Y")
         plt.show()
 
+    ### Searching methods ###
     def find_points(self, target_coords, tolerance=1e-6):
         """
         Finds point tags in the Gmsh model based on their coordinates.
@@ -270,6 +312,7 @@ class Mesh:
         gmsh.finalize()
         return matching_elements
 
+    ### Physical domain methods ###
     def physical_exists(self, name, dimension):
         gmsh.initialize()
         gmsh.open(self.file)
@@ -310,6 +353,7 @@ class Mesh:
             if point_tags:
                 gmsh.model.addPhysicalGroup(0, point_tags, group_tag)  # Dimension 0 = points
                 gmsh.model.setPhysicalName(0, group_tag, name)
+            gmsh.write(self.file)
             gmsh.finalize()
 
     def assign_physical_lines(self, start_coord, end_coord, name, tolerance=1e-6):
@@ -332,6 +376,7 @@ class Mesh:
             if line_tags:
                 gmsh.model.addPhysicalGroup(1, line_tags, group_tag)  # Dimension 1 = lines
                 gmsh.model.setPhysicalName(1, group_tag, name)
+            gmsh.write(self.file)
             gmsh.finalize()
 
     def assign_physical_elements(self, element_coord, name, tolerance=1e-6):
@@ -353,7 +398,32 @@ class Mesh:
             if element_tags:
                 gmsh.model.addPhysicalGroup(2, element_tags, group_tag)  # Dimension 2 = surfaces
                 gmsh.model.setPhysicalName(2, group_tag, name)
+            gmsh.write(self.file)
             gmsh.finalize()
+
+    def get_physical_group_tag(self, name, dimension):
+        """
+        Retrieves the tag of a physical group by its name and dimension.
+
+        :param name: The name of the physical group.
+        :param dimension: The dimension of the physical group (0 = points, 1 = lines, 2 = surfaces, etc.).
+        :return: The tag of the physical group if found, or None if not found.
+        """
+        gmsh.initialize()
+        gmsh.open(self.file)
+
+        # Get all physical groups in the specified dimension
+        physical_groups = gmsh.model.getPhysicalGroups(dimension)
+        for dim, tag in physical_groups:
+            if dim == dimension:
+                # Get the name of the physical group
+                physical_name = gmsh.model.getPhysicalName(dim, tag)
+                if physical_name == name:
+                    gmsh.finalize()
+                    return tag  # Return the matching tag
+
+        gmsh.finalize()
+        return None  # Return None if no match is found
 
 
 class FE_2D:
