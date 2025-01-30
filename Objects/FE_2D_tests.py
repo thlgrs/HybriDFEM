@@ -1,17 +1,15 @@
 import gmsh
-import numpy as np
-import matplotlib.pyplot as plt
-from FE_2D import Mesh  # Assuming the Mesh class is in a file named Mesh.py
+from FE_2D import Mesh
 
 def main():
-    # Define a square domain
+    # Data : square domain (preprocessing GUI)
     square_points = [(0, 0), (1, 0), (1, 1), (0, 1)]
     element_type = "triangle"
     element_size = 0.1
-    filename = "test_mesh.msh"
+    name = "test_mesh"
 
     # Initialize the Mesh class
-    mesh = Mesh(points=square_points, element_type=element_type, element_size=element_size, filename=filename)
+    mesh = Mesh(points=square_points, element_type=element_type, element_size=element_size, name=name)
 
     # Generate the mesh
     print("Generating mesh...")
@@ -45,6 +43,13 @@ def main():
     print("Assigning physical group 'CenterPoint' to point (0.5, 0.5)...")
     mesh.assign_physical_points([(0.5, 0.5)], "CenterPoint")
 
+    # Find path in the mesh
+    print("Finding path between (1,1) and (0,1)")
+    path = mesh.find_path((1,1),(0,1),1e-4)
+    print(f"Path found: {path}")
+    print("Assigning the path")
+    mesh.assign_physical_lines((1,1),(0,1),'Top', 1e-4)
+
     # Find elements containing a specific point
     print("Finding elements containing point (0.5, 0.5)...")
     elements_found = mesh.find_elements((0.5, 0.5), tolerance=1e-6)
@@ -52,9 +57,8 @@ def main():
 
     # Assign a physical group to the elements containing (0.5, 0.5)
     print("Assigning physical group 'CenterElement' to elements containing (0.5, 0.5)...")
-    mesh.assign_physical_elements((0.5, 0.5), "CenterElement")
+    mesh.assign_physical_elements((0.51, 0.51), "CenterElements")
 
-    print("Test script completed.")
 
 
 if __name__ == "__main__":

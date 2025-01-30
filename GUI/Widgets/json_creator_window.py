@@ -9,14 +9,14 @@ class JsonCreatorWindow(QWidget):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("Create JSON Input File")
+        self.setWindowTitle("Create Input File")
         self.setGeometry(200, 200, 1000, 600)
 
         # Main layout
         main_layout = QVBoxLayout(self)
 
         # Predefined lists for dropdown menus
-        self.element_types = ["truss", "beam", "shell", "solid"]
+        self.element_types = ["wall", "beam", "arch", "fe"]
         self.material_types = ["linear", "bilinear", "spring"]
         self.solver_types = ["linear", "nonlinear", "dynamic"]
 

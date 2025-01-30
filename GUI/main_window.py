@@ -20,7 +20,7 @@ class MainWindow(QMainWindow):
         # Create QTabWidget for tab layout
         self.tabs = QTabWidget()
 
-        # Add tabs
+        # Add tabs also possible to do a sidebar instead
         self.tabs.addTab(PreprocessingPage(), "Preprocessing")
         self.tabs.addTab(ProcessingPage(), "Processing")
         self.tabs.addTab(PostprocessingPage(), "Postprocessing")

@@ -36,6 +36,8 @@ NU = 0.0
 FY = 20e6
 A = 0.0
 
+F = 100e3
+
 Lin_Geom = False
 FEs = False
 
@@ -65,8 +67,6 @@ St.add_beam(N2, N3, BLOCKS, H_B, 100., b=B, material=mat.Bilin_Mat(E, NU, FY, A)
 St.make_nodes()
 St.make_cfs(Lin_Geom, nb_cps=CPS)
 
-F = 100e3
-
 St.loadNode(N2, [0], F)
 St.loadNode(N2, [1], -F, fixed=True)
 St.loadNode(N3, [1], -F, fixed=True)
@@ -80,7 +80,8 @@ if FEs:
 else:
     control_node = BLOCKS - 1
 
-# St.solve_dispcontrol(65, 65e-3, control_node, 0, dir_name=save_path, filename=filename, tol=1)
+St.solve_dispcontrol(65, 65e-3, control_node, 0, dir_name=save_path, filename=filename, tol=1)
+
 
 St.save_structure(f'Frame_BilinMat_' + text_lin_geom + text_fes)
 St.plot_structure(scale=10, plot_cf=False)

@@ -536,9 +536,7 @@ class Structure_2D:
         K_rf = self.K0[np.ix_(self.dof_fix, self.dof_free)]
         K_rr = self.K0[np.ix_(self.dof_fix, self.dof_fix)]
 
-        self.U[self.dof_free] = np.linalg.solve(K_ff,
-                                                self.P[self.dof_free] + self.P_fixed[self.dof_free] - K_fr @ self.U[
-                                                    self.dof_fix])
+        self.U[self.dof_free] = np.linalg.solve(K_ff, self.P[self.dof_free] + self.P_fixed[self.dof_free] - K_fr @ self.U[self.dof_fix])
         # self.P[self.dof_fix] = K_rf @ self.U[self.dof_free] + K_rr @ self.U[self.dof_fix]
         self.get_P_r()
 
@@ -663,7 +661,7 @@ class Structure_2D:
             hf.attrs['Simulation_Time'] = total_time
 
     def solve_dispcontrol(self, steps, disp, node, dof, tol=1, stiff='tan', max_iter=100,
-                          filename='Results_ForceControl', dir_name=''):
+                          filename='Results_DispControl', dir_name=''):
 
         time_start = time.time()
 

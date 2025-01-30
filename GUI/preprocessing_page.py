@@ -13,8 +13,8 @@ class PreprocessingPage(QWidget):
         layout = QVBoxLayout(self)
 
         # Create JSON File Option
-        self.create_json_label = QLabel("Create a New JSON Input File")
-        self.create_json_button = QPushButton("Create JSON File")
+        self.create_json_label = QLabel("Create a New Input File")
+        self.create_json_button = QPushButton("Create Input File")
         self.create_json_button.clicked.connect(self.open_json_creator_window)
         layout.addWidget(self.create_json_label)
         layout.addWidget(self.create_json_button)
