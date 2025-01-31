@@ -1,5 +1,6 @@
 import gmsh
 from FE_2D import Mesh
+from FE_2D import FE_2D
 
 def main():
     # Data : square domain (preprocessing GUI)
@@ -61,7 +62,23 @@ def main():
 
 
 
-if __name__ == "__main__":
+
+def test():
+    # Data : square domain (preprocessing GUI)
+    square_points = [(0, 0), (1, 0), (1, 1), (0, 1)]
+    element_type = "triangle"
+    element_size = 0.1
+    name = "test_mesh"
+    # Initialize the Mesh class
     gmsh.initialize()
-    main()
+    mesh = Mesh(points=square_points, element_type=element_type, element_size=element_size, name=name)
+    mesh.generate_mesh()
     gmsh.finalize()
+    fe_2D = FE_2D(mesh, 'steel', )
+    A,b = fe_2D.assembly()
+    print(A)
+    print(b)
+
+
+if __name__ == "__main__":
+    test()

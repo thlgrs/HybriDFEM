@@ -7,6 +7,8 @@ import numpy as np
 import skfem
 from matplotlib.collections import LineCollection
 from scipy.spatial import KDTree
+from skfem.models.poisson import laplace, unit_load
+from skfem.helpers import dot, grad  # helpers make forms look nice
 
 from Material import Material
 
@@ -387,28 +389,36 @@ class Mesh:
         return None  # Return None if no match is found
 
 
-from skfem.models.poisson import laplace, unit_load
-
-
 class FE_2D:
-    def __init__(self, mesh: Mesh, conditions, material: Material):
+    def __init__(self, mesh: Mesh, material: Material):
         self.mesh = mesh
         self.material = material  # recycle from Material class
 
     def assembly(self, order=1):
-        points = self.mesh.nodes()
-        elements = self.mesh.elements()
+        mesh_data = skfem.Mesh.load(self.mesh.file)
+        print(mesh_data)
+        """points = np.array(self.mesh.nodes())
+        elements = np.array(self.mesh.elements())
         match self.mesh.type:
             case 'triangle':
                 sk_mesh = skfem.MeshTri(points.T, elements.T)
             case 'quad':
                 sk_mesh = skfem.MeshQuad(points.T, elements.T)
             case _:
-                pass
+                pass"""
 
-        basis = skfem.Basis(sk_mesh, "P1")  # Define the basis with linear elements
-        A = basis.assemble(laplace)  # Stiffness matrix
-        b = basis.assemble(unit_load)  # Load vector (constant)
+        Vh = skfem.Basis(mesh_data, skfem.ElementTriP1())  # Define the basis with linear elements
+
+        @skfem.BilinearForm
+        def a(u, v, _):
+            return dot(grad(u), grad(v))
+        @skfem.LinearForm
+        def l(v, w):
+            x, y = w.x  # global coordinates
+            f = np.sin(np.pi * x) * np.sin(np.pi * y)
+            return f * v
+        A = a.assemble(Vh)  # Stiffness matrix
+        b = l.assemble(Vh)  # Load vector (constant)
 
         """
         D = basis.get_dofs()  # Get Dirichlet boundary DOFs (nodes on the boundary)
