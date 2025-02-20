@@ -35,6 +35,7 @@ class Material:
         self.stiff['E'] = E
         self.stiff0['E'] = E
 
+        self.nu = nu
         self.chi = corr_fact
         self.shear_def = shear_def
 
