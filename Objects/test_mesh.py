@@ -52,4 +52,5 @@ def cantilever(height, length):
     mesh.plot()
 
 if __name__ == "__main__":
-    cantilever(0.3, 3)
+    test_mesh()
+    #cantilever(0.3, 3)
