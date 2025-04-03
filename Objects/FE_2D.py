@@ -9,9 +9,11 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from scipy.spatial import KDTree
 
-from Pynite.FEModel3D import FEModel3D
-from Pynite.Visualization import Renderer
-
+from sfepy.discrete.fem import Mesh, FEDomain, Field
+from sfepy.discrete import FieldVariable, Material, Integral, Function, Equation, Equations, Problem
+from sfepy.mechanics.matcoefs import stiffness_from_youngpoisson
+from sfepy.terms import Term
+from sfepy.discrete.conditions import Condition, EssentialBC
 
 class Mesh:
     """
@@ -27,22 +29,7 @@ class Mesh:
         _mesh_cache (Optional[meshio.Mesh]): Cached mesh read from file.
     """
 
-    def __init__(
-        self,
-        points: List[Tuple[float, float]],
-        element_type: str,
-        element_size: float,
-        name: str = "myMesh",
-    ) -> None:
-        """
-        Initialize the mesh object.
-
-        Parameters:
-            points: List of (x, y) points defining the geometry.
-            element_type: Either "triangle" or "quad".
-            element_size: Characteristic mesh element size.
-            name: Name of the mesh/model.
-        """
+    def __init__(self, points: List[Tuple[float, float]], element_type: str, element_size: float, name: str = "myMesh"):
         if element_type not in ("triangle", "quad"):
             raise ValueError("element_type must be 'triangle' or 'quad'")
         self.points_list: List[Tuple[float, float]] = points
@@ -51,54 +38,38 @@ class Mesh:
         self.file: str = f"{name}.msh"
         self.name: str = name
         self.generated: int = 0
-        self._mesh_cache: Optional[meshio.Mesh] = None
         gmsh.initialize()  # initialize gmsh
 
     def clear_mesh(self) -> None:
-        """
-        Clear the current gmsh model and reset the generated flag and cache.
-        """
         gmsh.model.remove()
         self.generated = 0
-        self._mesh_cache = None
 
     def generate_mesh(self) -> None:
-        """
-        Generate the 2D mesh from the current points list.
-        """
         gmsh.model.add(self.name)
-        # add points to gmsh model
-        point_ids = [
-            gmsh.model.geo.addPoint(x, y, 0, self.element_size, tag)
-            for tag, (x, y) in enumerate(self.points_list, start=1)
-        ]
+        point_tags = [gmsh.model.geo.addPoint(x, y, 0, meshSize=self.element_size) for (x, y) in self.points_list]
 
-        # create lines between successive points (with wrap-around)
-        num_points = len(point_ids)
-        line_ids = [
-            gmsh.model.geo.addLine(point_ids[i], point_ids[(i + 1) % num_points])
-            for i in range(num_points)
-        ]
+        num_points = len(point_tags)
+        line_tags = [gmsh.model.geo.addLine(point_tags[i], point_tags[(i + 1) % num_points]) for i in range(num_points)]
 
-        # create a closed curve loop and plane surface
-        curve_loop = gmsh.model.geo.addCurveLoop(line_ids)
-        surface = gmsh.model.geo.addPlaneSurface([curve_loop])
-
+        cl = gmsh.model.geo.addCurveLoop(line_tags)
+        surface = gmsh.model.geo.addPlaneSurface([cl])
         gmsh.model.geo.synchronize()
+
+        # Add physical groups /!\ IMPORTANT FOR BC'S /!\
+        gmsh.model.add_physical_group(dim=2, tags=[surface], name="domain",tag=1)
+        gmsh.model.add_physical_group(dim=1, tags=line_tags, name="boundary", tag=1)
+        for i,line_tag in enumerate(line_tags):
+            gmsh.model.add_physical_group(dim=1, tags=[line_tag], name="line {}".format(i+1), tag=10+i)
+
+
         if self.element_type == "quad":
             gmsh.model.mesh.setRecombine(2, surface)
         gmsh.model.mesh.generate(2)
         gmsh.write(self.file)
         self.generated += 1
-        self._mesh_cache = meshio.read(self.file)
 
     def read_mesh(self) -> meshio.Mesh:
-        """
-        Read and return the mesh using meshio; uses a cached version if available.
-        """
-        if self._mesh_cache is None:
-            self._mesh_cache = meshio.read(self.file)
-        return self._mesh_cache
+        return meshio.read(self.file)
 
     def nodes(self) -> np.ndarray:
         """
@@ -351,132 +322,33 @@ class Material:
     rho: float # Density [kg/m^3]
 
 
-class FE_2D:
-    def __init__(self, mesh: Mesh, material: Material) -> None:
-        """
-        Initialize the finite element 2D model using the given mesh and material properties.
-        """
-        self.mesh = meshio.read(mesh.file)
-        self.model = FEModel3D()
+class FE_2D():
+    def __init__(self,mesh_file,material:Material):
+        mesh = Mesh.from_file(mesh_file)
+        domain = FEDomain('domain', mesh)
+        max_x, min_x = domain.get_mesh_bounding_box()[:,0]
+        eps = 1e-8 * (max_x - min_x)
+        omega = domain.create_region('Omega','all')
+        gamma1 = domain.create_region('Gamma1', 'vertices in x < %.10f' % (min_x + eps), 'facet')
+        gamma2 = domain.create_region('Gamma2', 'vertices in x > %.10f' % (max_x - eps), 'facet')
 
-        # add nodes to the model
-        for i, point in enumerate(self.mesh.points):
-            x, y, z = point
-            self.model.add_node(f'N{i+1}', x, y, z)
+        field = Field.from_args('fu', np.float64, 'vector', omega, 2)
+        u = FieldVariable('u','unknown', field)
+        v = FieldVariable('v','test', field, primary_var_name='u')
+        m = Material('m', D=stiffness_from_youngpoisson(dim=2, young=material.E, poisson=material.nu))
+        f = Material('f', values=[[0.0], [0.01]])
 
-        # define material properties (e.g. for steel)
-        G = material.E / (2 * (1 + material.nu))  # shear modulus
-        self.model.add_material('Material', material.E, G, material.nu, material.rho)
+        integral = Integral('i', order=3)
 
-        # define section properties (e.g. rectangular section)
-        self.model.add_section('Section', 0.3, 0.5, 1, 1)
+        t1 = Term.new('dw_lin_elastic(m.D, v, u)', integral, omega, m=m, v=v, u=u)
+        t2 = Term.new('dw_volume_lvf(f.val, v)', integral, omega, f=f, v=v)
 
-        element_count = 1
-        for cell in self.mesh.cells:
-            if cell.type == 'line':
-                for element in cell.data:
-                    n1, n2 = element
-                    self.model.add_member(f'M{element_count}', f'N{n1+1}', f'N{n2+1}', 'Material', 'Section')
-                    element_count += 1
-            elif cell.type == 'triangle':
-                for element in cell.data:
-                    n1, n2, n3 = element
-                    self.model.add_plate(f'P{element_count}', f'N{n1+1}', f'N{n2+1}', f'N{n3+1}', None, 0.1, 'Material')
-                    element_count += 1
-            elif cell.type == 'quad':
-                for element in cell.data:
-                    n1, n2, n3, n4 = element
-                    self.model.add_quad(f'Q{element_count}', f'N{n1+1}', f'N{n2+1}', f'N{n3+1}', f'N{n4+1}', 0.1, 'Material')
-                    element_count += 1
+        fix_u = EssentialBC('fix_u', gamma1, {'u.all':0.0})
+        omega = domain.create_region('Omega','all')
 
-    def define_support(self, node_id: Union[int, str], support_conditions: Tuple[bool, bool, bool, bool, bool, bool]) -> None:
-        """
-        Define support conditions for a given node.
 
-        Parameters:
-            node_id: The node identifier (int or str).
-            support_conditions: A tuple of six booleans (UX, UY, UZ, RX, RY, RZ).
-        """
-        self.model.def_support(f'N{node_id}', *support_conditions)
 
-    def add_nodal_load(self, node_id: Union[int, str], load: Tuple[float, float, float, float, float, float]) -> None:
-        """
-        Add a nodal load to a given node.
 
-        Parameters:
-            node_id: The node identifier.
-            load: A tuple of forces and moments (FX, FY, FZ, MX, MY, MZ).
-        """
-        FX, FY, FZ, MX, MY, MZ = load
-        if FX:
-            self.model.add_node_load(f'N{node_id}', 'FX', FX)
-        if FY:
-            self.model.add_node_load(f'N{node_id}', 'FY', FY)
-        if FZ:
-            self.model.add_node_load(f'N{node_id}', 'FZ', FZ)
-        if MX:
-            self.model.add_node_load(f'N{node_id}', 'MX', MX)
-        if MY:
-            self.model.add_node_load(f'N{node_id}', 'MY', MY)
-        if MZ:
-            self.model.add_node_load(f'N{node_id}', 'MZ', MZ)
 
-    def analyze(self) -> None:
-        """
-        Perform the analysis.
-        """
-        self.model.analyze()
 
-    def get_node_displacement(self, node_id: Union[int, str]) -> Tuple[float, float, float]:
-        """
-        Get the displacement of a node.
 
-        Returns:
-            A tuple (DX, DY, DZ) representing the nodal displacements.
-        """
-        node = self.model.nodes[f"N{node_id}"]
-        return node.DX, node.DY, node.DZ
-
-    def find_node_id_by_coordinates(self, x: float, y: float, z: float, tolerance: float = 1e-6) -> Optional[str]:
-        """
-        Find the ID of the node closest to the given coordinates (x, y, z).
-
-        Returns:
-            The node ID if found within the specified tolerance; otherwise, None.
-        """
-        min_distance = float("inf")
-        closest_node_id: Optional[str] = None
-
-        for node_id, node in self.model.nodes.items():
-            distance = np.sqrt((node.X - x) ** 2 + (node.Y - y) ** 2 + (node.Z - z) ** 2)
-            if distance < min_distance:
-                min_distance = distance
-                closest_node_id = node_id
-
-        return closest_node_id if min_distance <= tolerance else None
-
-    def visualize(
-        self,
-        annotation_size: float = 0.1,
-        deformed_shape: bool = True,
-        deformed_scale: float = 1000,
-        render_loads: bool = True,
-        show_nodes: bool = False,
-    ) -> None:
-        """
-        Visualize the finite element model using PyNite's Renderer.
-
-        Parameters:
-            annotation_size: Size of the annotations in the plot.
-            deformed_shape: Whether to render the deformed shape.
-            deformed_scale: Scale factor for the deformed shape.
-            render_loads: Whether to render the applied loads.
-            show_nodes: Whether to display node names.
-        """
-        renderer = Renderer(self.model)
-        renderer.annotation_size = annotation_size
-        renderer.deformed_shape = deformed_shape
-        renderer.deformed_scale = deformed_scale
-        renderer.render_loads = render_loads
-        renderer.show_nodes = show_nodes
-        renderer.render_model()
