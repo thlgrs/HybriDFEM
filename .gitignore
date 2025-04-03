@@ -27,3 +27,6 @@ env/
 
 # IDE files and folders
 .vscode/
+
+#tests
+tests/
