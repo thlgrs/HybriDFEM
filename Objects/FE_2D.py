@@ -11,10 +11,7 @@ import numpy as np
 from sfepy.discrete.fem import FEDomain, Field
 from sfepy.discrete.fem import Mesh as sfepyMesh
 from sfepy.discrete import Material as sfepyMaterial
-from sfepy.discrete import (
-    FieldVariable, Integral, Equation, Equations,
-    Problem, Conditions
-)
+from sfepy.discrete import (FieldVariable, Integral, Equation, Equations, Problem, Conditions)
 from sfepy.discrete.conditions import EssentialBC
 from sfepy.mechanics.matcoefs import stiffness_from_youngpoisson
 from sfepy.terms import Term
@@ -25,10 +22,18 @@ from sfepy.solvers.nls import Newton
 class Mesh:
 
     def __init__(self, points: List[Tuple[float, float]], element_type: str, element_size: float, name: str = "myMesh"):
-        if element_type not in ("triangle", "quad"):
-            raise ValueError("element_type must be 'triangle' or 'quad'")
+        """
+        Initialize, modify and generate a mesh object.
+        Args:
+            points: list of points forming the edge of the mesh
+            element_type: "triangle", "quad", "tri", "quadrilateral"
+            element_size: size of elements
+            name: name of the mesh
+        """
+        if element_type not in ("triangle", "quad", "tri", "quadrilateral"):
+            raise ValueError("element_type must be 'triangle'/'tri' or 'quadrilateral'/'quad'")
         self.points_list: List[Tuple[float, float]] = points
-        self.element_type: str = element_type
+        self.element_type: str = 'triangle' if element_type == 'triangle' or 'tri' else 'quad'
         self.element_size: float = element_size
         self.file: str = f"{name}.msh"
         self.name: str = name
@@ -51,7 +56,7 @@ class Mesh:
         surface = gmsh.model.geo.addPlaneSurface([cl])
         gmsh.model.geo.synchronize()
 
-        # Add physical groups /!\ IMPORTANT FOR BC'S /!\
+        # Add physical groups /!\ IMPORTANT FOR BC'S /!\ maybe not
         gmsh.model.add_physical_group(dim=2, tags=[surface], name="domain", tag=1)
         gmsh.model.add_physical_group(dim=1, tags=line_tags, name="boundary", tag=2)
         for i, line_tag in enumerate(line_tags):
@@ -152,7 +157,7 @@ class Mesh:
             plt.savefig(save_path)
         plt.show()
 
-    def _node_tag_to_index(self) -> Dict[int, int]:
+    def _node_tag_to_index(self):
         """
         Build a mapping from gmsh node tag to index in the node coordinate array.
         """
@@ -189,8 +194,7 @@ class Mesh:
     def find_path(
             self,
             coord1: Tuple[float, float],
-            coord2: Tuple[float, float],
-            tolerance: float = 1e-6,
+            coord2: Tuple[float, float]
     ) -> Optional[List[int]]:
         """
         Find a path (sequence of node tags) between two coordinates using BFS on the connectivity graph.
@@ -198,7 +202,6 @@ class Mesh:
         Parameters:
             coord1: Starting coordinate.
             coord2: Ending coordinate.
-            tolerance: Tolerance for searching nearest nodes.
 
         Returns:
             A list of node tags representing the path, or None if not found.
@@ -320,6 +323,13 @@ class Material:
 
 class FE_2D:
     def __init__(self, mesh_file: str, material: Material, order: int = 1):
+        """
+
+        Args:
+            mesh_file: filename of .msh file.
+            material: material to use.
+            order: field approximation order
+        """
 
         # --- Mesh and domain -------------------------------------------------
         self.mesh_name = mesh_file.removesuffix('.msh')
@@ -331,18 +341,27 @@ class FE_2D:
         self.domain = FEDomain('domain', mesh)
 
         bb = self.domain.get_mesh_bounding_box()  # [[xmin,ymin],[xmax,ymax]]
-        xmin, ymin = bb[0];
+        xmin, ymin = bb[0]
         xmax, ymax = bb[1]
-        tol = 1e-8 * max(xmax - xmin, ymax - ymin)  # geometric tolerance
-        self.sel = {
-            'all': 'all',
-            'left': f'vertices in (x < {xmin + tol:.10e})',
-            'right': f'vertices in (x > {xmax - tol:.10e})',
-            'bottom': f'vertices in (y < {ymin + tol:.10e})',
-            'top': f'vertices in (y > {ymax - tol:.10e})',
-            'surface': 'vertices of surface',  # entire boundary
+        gtol = 1e-8 * max(xmax - xmin, ymax - ymin)  # geometric tolerance
+        self.select = {
+            'all': lambda: 'all',
+            'left': lambda: f'vertices in (x < {xmin + gtol:.10e})',
+            'right': lambda: f'vertices in (x > {xmax - gtol:.10e})',
+            'bottom': lambda: f'vertices in (y < {ymin + gtol:.10e})',
+            'top': lambda: f'vertices in (y > {ymax - gtol:.10e})',
+            'surface': lambda: 'vertices of surface',  # entire boundary,
+            'points_near': lambda x, y,
+                                  tol=1e-8: f'vertices in (x > {x-tol}) *v (x < {x+tol})*v (y > {y-tol}) *v (y < {y+tol})',
+            'points_on_x': lambda x, tol=1e-8: f'vertices in (x > {x-tol}) *v (x < {x+tol})',
+            'points_on_y': lambda y, tol=1e-8: f'vertices in (y > {y-tol}) *v (y < {y+tol})',
+            'points_between_x': lambda x1, x2: f'vertices in (x > {x1}) *v (x < {x2})',
+            'points_between_y': lambda y1, y2: f'vertices in (y > {y1}) *v (y < {y2})',
+            'points_on_x_between_y': lambda x, y1, y2,
+                                            tol=1e-8: f'vertices in (x > {x-tol}) *v (x < {x+tol}) *v (y > {y1}) *v (y < {y2})',
+            'points_on_y_between_x': lambda y, x1, x2,
+                                            tol=1e-8: f'vertices in (y > {y-tol}) *v (y < {y+tol}) *v (x > {x1}) *v (x < {x2})'
         }
-
         # --- Regions ---------------------------------------------------------
         self.regions = {}
         self.regions['Omega'] = self.domain.create_region('Omega', 'all')
@@ -367,33 +386,28 @@ class FE_2D:
         self.ebcs = []  # EssentialBC objects
         self.load_terms = []  # surface traction terms
 
-    def add_dirichlet(self, name: str, selector: str, comp_dict: dict):
+    def add_dirichlet(self, name: str, selector: str, comp_dict: dict, **kwargs):
         """
         Fix a displacement component (or all) on a given boundary.
         """
-        reg = self.domain.create_region(name, selector, kind='facet')
+        reg = self.domain.create_region(name, self.select[selector](**kwargs), kind='facet')
         self.regions[name] = reg
         self.ebcs.append(EssentialBC(name, reg, comp_dict))
 
-    def add_traction(self, name: str, selector: str, px: float = 0, py: float = 0, kind: str = 'facet'):
+    def add_surface_load(self, name: str, selector: str, px: float = 0, py: float = 0, kind: str = 'facet', **kwargs):
         if not px == py == 0:
-            reg = self.domain.create_region(name, selector, kind=kind)
+            reg = self.domain.create_region(name, self.select[selector](**kwargs), kind=kind)
             self.regions[name] = reg
             load = sfepyMaterial(f'{name}', val=[[px], [py]])
             self.load_terms.append(Term.new(f'dw_surface_ltr({name}.val, v)', self.integral, reg, load=load, v=self.v))
 
-    def points_near(self, name: str, x: float, y: float, tol=1e-8):
-        sel = f'vertices in (x > {x}-{tol}) *v (x < {x}+{tol})*v (y > {y}-{tol}) *v (y < {y}+{tol})'
-        reg = self.domain.create_region(name, sel, kind='vertex')
+    def add_point_load(self, name: str, x: float, y: float, force_vec, total: bool = False):
+        # STILL TO TEST
+        # build the vertex region
+        reg = self.domain.create_region(name, self.select['points_near'](x, y), kind='vertex')
         n_vert = reg.vertices.shape[0]
         if n_vert == 0:
             raise ValueError(f"region '{name}' is empty – check selector!")
-        else:
-            return reg, n_vert
-
-    def add_point_load(self, name: str, x: float, y: float, force_vec, total: bool = False):
-        # build the vertex region
-        reg, n_vert = self.points_near(name, x, y)
         self.regions[name] = reg
 
         force_vec = np.asarray(force_vec, dtype=np.float64).reshape(1, -1)
@@ -413,7 +427,7 @@ class FE_2D:
     def solve(self, vtk_out: str = None):
         """assemble, solve and store the converged state"""
         if vtk_out is None:
-            vtk_out = '{}_solved.vtk'.format(self.mesh_name)
+            vtk_out = '{}_solved_lin.vtk'.format(self.mesh_name)
         elif not vtk_out.endswith('.vtk'):
             vtk_out += '.vtk'
 
