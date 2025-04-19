@@ -4,16 +4,23 @@ from typing import List, Tuple, Optional, Union, Dict
 
 import gmsh
 import meshio
-import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from scipy.spatial import KDTree
-
-from sfepy.discrete.fem import Mesh, FEDomain, Field
-from sfepy.discrete import FieldVariable, Material, Integral, Function, Equation, Equations, Problem
+import numpy as np
+from sfepy.discrete.fem import FEDomain, Field
+from sfepy.discrete.fem import Mesh as sfepyMesh
+from sfepy.discrete import Material as sfepyMaterial
+from sfepy.discrete import (
+    FieldVariable, Integral, Equation, Equations,
+    Problem, Conditions
+)
+from sfepy.discrete.conditions import EssentialBC
 from sfepy.mechanics.matcoefs import stiffness_from_youngpoisson
 from sfepy.terms import Term
-from sfepy.discrete.conditions import Condition, EssentialBC
+from sfepy.solvers.ls import ScipyDirect
+from sfepy.solvers.nls import Newton
+
 
 class Mesh:
     """
@@ -46,6 +53,7 @@ class Mesh:
 
     def generate_mesh(self) -> None:
         gmsh.model.add(self.name)
+        gmsh.option.setNumber("Mesh.MshFileVersion", 2.2) #compatibility with sfepy
         point_tags = [gmsh.model.geo.addPoint(x, y, 0, meshSize=self.element_size) for (x, y) in self.points_list]
 
         num_points = len(point_tags)
@@ -57,7 +65,7 @@ class Mesh:
 
         # Add physical groups /!\ IMPORTANT FOR BC'S /!\
         gmsh.model.add_physical_group(dim=2, tags=[surface], name="domain",tag=1)
-        gmsh.model.add_physical_group(dim=1, tags=line_tags, name="boundary", tag=1)
+        gmsh.model.add_physical_group(dim=1, tags=line_tags, name="boundary", tag=2)
         for i,line_tag in enumerate(line_tags):
             gmsh.model.add_physical_group(dim=1, tags=[line_tag], name="line {}".format(i+1), tag=10+i)
 
@@ -314,41 +322,166 @@ class Mesh:
                 matching_elements.append(offset + i + 1)
         return matching_elements
 
-
 @dataclass
 class Material:
     E: float   # Young's modulus [Pa]
     nu: float  # Poisson's ratio
     rho: float # Density [kg/m^3]
+    plane: str #stress or strain
 
 
-class FE_2D():
-    def __init__(self,mesh_file,material:Material):
-        mesh = Mesh.from_file(mesh_file)
-        domain = FEDomain('domain', mesh)
-        max_x, min_x = domain.get_mesh_bounding_box()[:,0]
-        eps = 1e-8 * (max_x - min_x)
-        omega = domain.create_region('Omega','all')
-        gamma1 = domain.create_region('Gamma1', 'vertices in x < %.10f' % (min_x + eps), 'facet')
-        gamma2 = domain.create_region('Gamma2', 'vertices in x > %.10f' % (max_x - eps), 'facet')
+class FE_2D:
+    def __init__(self, mesh_file: str, material:Material, order: int = 1):
 
-        field = Field.from_args('fu', np.float64, 'vector', omega, 2)
-        u = FieldVariable('u','unknown', field)
-        v = FieldVariable('v','test', field, primary_var_name='u')
-        m = Material('m', D=stiffness_from_youngpoisson(dim=2, young=material.E, poisson=material.nu))
-        f = Material('f', values=[[0.0], [0.01]])
+        # --- Mesh and domain -------------------------------------------------
+        self.mesh_name = mesh_file.removesuffix('.msh')
+        mesh = sfepyMesh.from_file(mesh_file)
+        if mesh.coors.shape[1] == 3:          # flatten to x‑y plane if needed
+            mesh.coors[:, 2] = 0.0
+        mesh.write('{}.vtk'.format(self.mesh_name), io='auto')
+        mesh = sfepyMesh.from_file('{}.vtk'.format(self.mesh_name))
+        self.domain = FEDomain('domain', mesh)
+        bb = self.domain.get_mesh_bounding_box()  # [[xmin,ymin],[xmax,ymax]]
+        xmin, ymin = bb[0]
+        xmax, ymax = bb[1]
+        tol = 1e-8 * max(xmax - xmin, ymax - ymin)  # geometric tolerance
 
-        integral = Integral('i', order=3)
+        self.sel = {
+            'all': 'all',
+            'left': f'vertices in (x < {xmin + tol:.10e})',
+            'right': f'vertices in (x > {xmax - tol:.10e})',
+            'bottom': f'vertices in (y < {ymin + tol:.10e})',
+            'top': f'vertices in (y > {ymax - tol:.10e})',
+            'surface': 'vertices of surface',  # entire boundary
+        }
 
-        t1 = Term.new('dw_lin_elastic(m.D, v, u)', integral, omega, m=m, v=v, u=u)
-        t2 = Term.new('dw_volume_lvf(f.val, v)', integral, omega, f=f, v=v)
+        # --- Regions ---------------------------------------------------------
+        self.regions = {}
+        self.regions['Omega'] = self.domain.create_region('Omega', 'all')
 
-        fix_u = EssentialBC('fix_u', gamma1, {'u.all':0.0})
-        omega = domain.create_region('Omega','all')
+        # --- Field, variables ------------------------------------------------
+        self.field = Field.from_args('u_field', np.float64, 'vector',
+                                     self.regions['Omega'], approx_order=order)
+        self.u = FieldVariable('u', 'unknown', self.field)
+        self.v = FieldVariable('v', 'test', self.field, primary_var_name='u')
 
+        # --- Material --------------------------------------------------------
+        self.D = stiffness_from_youngpoisson(2, material.E, material.nu, plane=material.plane)
+        self.mat = sfepyMaterial('mat', D=self.D)
 
+        # --- Internal term (always present) ----------------------------------
+        self.integral = Integral('i', order=2)
+        self.t_int = Term.new('dw_lin_elastic(mat.D, v, u)',
+                              self.integral, self.regions['Omega'],
+                              mat=self.mat, v=self.v, u=self.u)
 
+        # --- Containers for BCs and loads ------------------------------------
+        self.ebcs = []          # EssentialBC objects
+        self.load_terms = []    # surface traction terms
 
+    def add_dirichlet(self, name: str, selector: str, comp_dict: dict):
+        """
+        Fix a displacement component (or all) on a given boundary.
+        """
+        reg = self.domain.create_region(name, selector, kind='facet')
+        self.regions[name] = reg
+        self.ebcs.append(EssentialBC(name, reg, comp_dict))
 
+    def add_traction(self, name: str, selector: str, traction_vec, kind: str = 'facet'):
+        """
+        Args:
+            name:
+            selector:
+            traction_vec: [[p_x],[p_y]] in Pa
+            kind:
+
+        Returns:
+        """
+
+        reg = self.domain.create_region(name, selector, kind=kind)
+        self.regions[name] = reg
+        load = sfepyMaterial(f'{name}', val=traction_vec)
+        self.load_terms.append(Term.new(f'dw_surface_ltr({name}.val, v)', self.integral, reg, load=load, v=self.v))
+
+    def add_point_load(self, name: str, selector: str,
+                       force_vec, kind: str = 'vertex',
+                       total: bool = False):
+        expr = self.sel.get(selector, selector)
+
+        # build the vertex region
+        reg = self.domain.create_region(name, expr, kind=kind)
+        self.regions[name] = reg
+
+        n_vert = reg.vertices.shape[0]
+        if n_vert == 0:
+            raise ValueError(f"region '{name}' is empty – check selector!")
+
+        force_vec = np.asarray(force_vec, dtype=np.float64).reshape(1, -1)
+        if total:
+            force_vec = force_vec / n_vert  # divide resultant force
+
+        # repeat row → shape (n_vert, ndim)
+        load_val = np.repeat(force_vec, n_vert, axis=0)
+
+        # material and term
+        mat_name = f'pload_{name}'
+        load = sfepyMaterial(mat_name, val=load_val)
+        term = Term.new(f'dw_point_load({mat_name}.val, v)',
+                        self.integral, reg, load=load, v=self.v)
+
+        self.load_terms.append(term)
+
+    def solve(self, vtk_out:str=None):
+        """assemble, solve and store the converged state"""
+        if vtk_out is None: vtk_out = '{}_solved.vtk'.format(self.mesh_name)
+        elif not vtk_out.endswith('.vtk'): vtk_out += '.vtk'
+
+        rhs = self.t_int
+        for lt in self.load_terms:
+            rhs = rhs - lt
+        eq = Equation('balance', rhs)
+
+        pb = Problem('elasticity_2D', equations=Equations([eq]), domain=self.domain)
+        pb.set_bcs(ebcs=Conditions(self.ebcs))
+
+        ls  = ScipyDirect({})
+        nls = Newton({'i_max': 1}, lin_solver=ls)
+        pb.set_solver(nls)
+
+        self.state = pb.solve()                  # keep for later use
+        self.u     = pb.get_variables()['u']     # update variable handle
+        pb.save_state(vtk_out, self.state)
+
+        return self.state
+
+    def probe(self, coors, quantity='u', return_status=False):
+        """
+        Interpolate solution‑related data at coordinates *coors*.
+        quantity ∈ {'u','ux','uy','strain','stress','sxx','syy','sxy'}.
+        """
+        if not hasattr(self, 'state'):
+            raise RuntimeError('solve() first!')
+
+        pts = np.atleast_2d(coors)
+        u_val, _, inside = self.u.evaluate_at(pts, ret_cells=True, ret_status=True)
+
+        # strains from displacement gradient
+        if quantity.startswith('strain') or quantity.startswith('stress') or quantity[-2:] in ('xx', 'yy', 'xy'):
+            grad = self.u.evaluate_at(pts, mode='grad')
+            eps = 0.5 * (grad + np.transpose(grad, (0, 2, 1)))
+            strain = np.stack([eps[:, 0, 0], eps[:, 1, 1], 2 * eps[:, 0, 1]], axis=1) # [ε_xx, ε_yy, γ_xy]
+
+            if quantity == 'strain':
+                out = strain
+            else:
+                stress = strain @ self.D.T  # Voigt
+                voigt = dict(sxx=stress[:, 0], syy=stress[:, 1],
+                             sxy=stress[:, 2],
+                             exx=strain[:, 0], eyy=strain[:, 1], exy=strain[:, 2])
+                out = voigt[quantity]
+        else:  # displacement components
+            comp = dict(u=u_val, ux=u_val[:, 0], uy=u_val[:, 1])
+            out = comp[quantity]
+        return (out, inside) if return_status else out
 
 
