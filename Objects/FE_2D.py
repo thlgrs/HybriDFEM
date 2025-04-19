@@ -23,18 +23,6 @@ from sfepy.solvers.nls import Newton
 
 
 class Mesh:
-    """
-    A 2D mesh generator using gmsh.
-
-    Attributes:
-        points_list (List[Tuple[float, float]]): List of (x, y) coordinates.
-        element_type (str): Element type ("triangle" or "quad").
-        element_size (float): Characteristic mesh element size.
-        file (str): Output filename.
-        name (str): Name of the model.
-        generated (int): Counter to indicate if the mesh was generated.
-        _mesh_cache (Optional[meshio.Mesh]): Cached mesh read from file.
-    """
 
     def __init__(self, points: List[Tuple[float, float]], element_type: str, element_size: float, name: str = "myMesh"):
         if element_type not in ("triangle", "quad"):
@@ -53,7 +41,7 @@ class Mesh:
 
     def generate_mesh(self) -> None:
         gmsh.model.add(self.name)
-        gmsh.option.setNumber("Mesh.MshFileVersion", 2.2) #compatibility with sfepy
+        gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)  # compatibility with sfepy
         point_tags = [gmsh.model.geo.addPoint(x, y, 0, meshSize=self.element_size) for (x, y) in self.points_list]
 
         num_points = len(point_tags)
@@ -64,11 +52,10 @@ class Mesh:
         gmsh.model.geo.synchronize()
 
         # Add physical groups /!\ IMPORTANT FOR BC'S /!\
-        gmsh.model.add_physical_group(dim=2, tags=[surface], name="domain",tag=1)
+        gmsh.model.add_physical_group(dim=2, tags=[surface], name="domain", tag=1)
         gmsh.model.add_physical_group(dim=1, tags=line_tags, name="boundary", tag=2)
-        for i,line_tag in enumerate(line_tags):
-            gmsh.model.add_physical_group(dim=1, tags=[line_tag], name="line {}".format(i+1), tag=10+i)
-
+        for i, line_tag in enumerate(line_tags):
+            gmsh.model.add_physical_group(dim=1, tags=[line_tag], name="line {}".format(i + 1), tag=10 + i)
 
         if self.element_type == "quad":
             gmsh.model.mesh.setRecombine(2, surface)
@@ -171,13 +158,13 @@ class Mesh:
         """
         node_tags, _, _ = gmsh.model.mesh.getNodes()
         tags_array = np.array(node_tags)
-        return {tag: idx for idx, tag in enumerate(tags_array)}
+        dic = {tag: idx for idx, tag in enumerate(tags_array)}
+        return dic
 
-    def find_points(
-        self,
-        target_coords: Union[Tuple[float, float], List[Tuple[float, float]]],
-        tolerance: float = 1e-6,
-    ) -> List[int]:
+    def find_points(self,
+                    target_coords: Union[Tuple[float, float], List[Tuple[float, float]]],
+                    tolerance: float = 1e-6,
+                    ) -> List[int]:
         """
         Find mesh node tags whose coordinates match target_coords within a tolerance.
 
@@ -200,10 +187,10 @@ class Mesh:
         return matching_points
 
     def find_path(
-        self,
-        coord1: Tuple[float, float],
-        coord2: Tuple[float, float],
-        tolerance: float = 1e-6,
+            self,
+            coord1: Tuple[float, float],
+            coord2: Tuple[float, float],
+            tolerance: float = 1e-6,
     ) -> Optional[List[int]]:
         """
         Find a path (sequence of node tags) between two coordinates using BFS on the connectivity graph.
@@ -235,7 +222,7 @@ class Mesh:
             graph.setdefault(n2, []).append(n1)
 
         def bfs_path(
-            graph: Dict[int, List[int]], start: int, end: int
+                graph: Dict[int, List[int]], start: int, end: int
         ) -> Optional[List[int]]:
             queue = deque([(start, [start])])
             visited = set()
@@ -254,7 +241,7 @@ class Mesh:
         return bfs_path(graph, start_node, end_node)
 
     def find_elements(
-        self, coord: Tuple[float, float], tolerance: float = 1e-6
+            self, coord: Tuple[float, float], tolerance: float = 1e-6
     ) -> List[int]:
         """
         Find element indices (for triangles and quadrangles) that contain the given coordinate.
@@ -322,30 +309,31 @@ class Mesh:
                 matching_elements.append(offset + i + 1)
         return matching_elements
 
+
 @dataclass
 class Material:
-    E: float   # Young's modulus [Pa]
+    E: float  # Young's modulus [Pa]
     nu: float  # Poisson's ratio
-    rho: float # Density [kg/m^3]
-    plane: str #stress or strain
+    rho: float  # Density [kg/m^3]
+    plane: str  # stress or strain
 
 
 class FE_2D:
-    def __init__(self, mesh_file: str, material:Material, order: int = 1):
+    def __init__(self, mesh_file: str, material: Material, order: int = 1):
 
         # --- Mesh and domain -------------------------------------------------
         self.mesh_name = mesh_file.removesuffix('.msh')
         mesh = sfepyMesh.from_file(mesh_file)
-        if mesh.coors.shape[1] == 3:          # flatten to x‑y plane if needed
+        if mesh.coors.shape[1] == 3:  # flatten to x‑y plane if needed
             mesh.coors[:, 2] = 0.0
         mesh.write('{}.vtk'.format(self.mesh_name), io='auto')
         mesh = sfepyMesh.from_file('{}.vtk'.format(self.mesh_name))
         self.domain = FEDomain('domain', mesh)
+
         bb = self.domain.get_mesh_bounding_box()  # [[xmin,ymin],[xmax,ymax]]
-        xmin, ymin = bb[0]
+        xmin, ymin = bb[0];
         xmax, ymax = bb[1]
         tol = 1e-8 * max(xmax - xmin, ymax - ymin)  # geometric tolerance
-
         self.sel = {
             'all': 'all',
             'left': f'vertices in (x < {xmin + tol:.10e})',
@@ -376,8 +364,8 @@ class FE_2D:
                               mat=self.mat, v=self.v, u=self.u)
 
         # --- Containers for BCs and loads ------------------------------------
-        self.ebcs = []          # EssentialBC objects
-        self.load_terms = []    # surface traction terms
+        self.ebcs = []  # EssentialBC objects
+        self.load_terms = []  # surface traction terms
 
     def add_dirichlet(self, name: str, selector: str, comp_dict: dict):
         """
@@ -387,34 +375,26 @@ class FE_2D:
         self.regions[name] = reg
         self.ebcs.append(EssentialBC(name, reg, comp_dict))
 
-    def add_traction(self, name: str, selector: str, traction_vec, kind: str = 'facet'):
-        """
-        Args:
-            name:
-            selector:
-            traction_vec: [[p_x],[p_y]] in Pa
-            kind:
+    def add_traction(self, name: str, selector: str, px: float = 0, py: float = 0, kind: str = 'facet'):
+        if not px == py == 0:
+            reg = self.domain.create_region(name, selector, kind=kind)
+            self.regions[name] = reg
+            load = sfepyMaterial(f'{name}', val=[[px], [py]])
+            self.load_terms.append(Term.new(f'dw_surface_ltr({name}.val, v)', self.integral, reg, load=load, v=self.v))
 
-        Returns:
-        """
-
-        reg = self.domain.create_region(name, selector, kind=kind)
-        self.regions[name] = reg
-        load = sfepyMaterial(f'{name}', val=traction_vec)
-        self.load_terms.append(Term.new(f'dw_surface_ltr({name}.val, v)', self.integral, reg, load=load, v=self.v))
-
-    def add_point_load(self, name: str, selector: str,
-                       force_vec, kind: str = 'vertex',
-                       total: bool = False):
-        expr = self.sel.get(selector, selector)
-
-        # build the vertex region
-        reg = self.domain.create_region(name, expr, kind=kind)
-        self.regions[name] = reg
-
+    def points_near(self, name: str, x: float, y: float, tol=1e-8):
+        sel = f'vertices in (x > {x}-{tol}) *v (x < {x}+{tol})*v (y > {y}-{tol}) *v (y < {y}+{tol})'
+        reg = self.domain.create_region(name, sel, kind='vertex')
         n_vert = reg.vertices.shape[0]
         if n_vert == 0:
             raise ValueError(f"region '{name}' is empty – check selector!")
+        else:
+            return reg, n_vert
+
+    def add_point_load(self, name: str, x: float, y: float, force_vec, total: bool = False):
+        # build the vertex region
+        reg, n_vert = self.points_near(name, x, y)
+        self.regions[name] = reg
 
         force_vec = np.asarray(force_vec, dtype=np.float64).reshape(1, -1)
         if total:
@@ -426,15 +406,16 @@ class FE_2D:
         # material and term
         mat_name = f'pload_{name}'
         load = sfepyMaterial(mat_name, val=load_val)
-        term = Term.new(f'dw_point_load({mat_name}.val, v)',
-                        self.integral, reg, load=load, v=self.v)
+        term = Term.new(f'dw_point_load({mat_name}.val, v)', self.integral, reg, load=load, v=self.v)
 
         self.load_terms.append(term)
 
-    def solve(self, vtk_out:str=None):
+    def solve(self, vtk_out: str = None):
         """assemble, solve and store the converged state"""
-        if vtk_out is None: vtk_out = '{}_solved.vtk'.format(self.mesh_name)
-        elif not vtk_out.endswith('.vtk'): vtk_out += '.vtk'
+        if vtk_out is None:
+            vtk_out = '{}_solved.vtk'.format(self.mesh_name)
+        elif not vtk_out.endswith('.vtk'):
+            vtk_out += '.vtk'
 
         rhs = self.t_int
         for lt in self.load_terms:
@@ -444,12 +425,12 @@ class FE_2D:
         pb = Problem('elasticity_2D', equations=Equations([eq]), domain=self.domain)
         pb.set_bcs(ebcs=Conditions(self.ebcs))
 
-        ls  = ScipyDirect({})
+        ls = ScipyDirect({})
         nls = Newton({'i_max': 1}, lin_solver=ls)
         pb.set_solver(nls)
 
-        self.state = pb.solve()                  # keep for later use
-        self.u     = pb.get_variables()['u']     # update variable handle
+        self.state = pb.solve()  # keep for later use
+        self.u = pb.get_variables()['u']  # update variable handle
         pb.save_state(vtk_out, self.state)
 
         return self.state
@@ -469,7 +450,7 @@ class FE_2D:
         if quantity.startswith('strain') or quantity.startswith('stress') or quantity[-2:] in ('xx', 'yy', 'xy'):
             grad = self.u.evaluate_at(pts, mode='grad')
             eps = 0.5 * (grad + np.transpose(grad, (0, 2, 1)))
-            strain = np.stack([eps[:, 0, 0], eps[:, 1, 1], 2 * eps[:, 0, 1]], axis=1) # [ε_xx, ε_yy, γ_xy]
+            strain = np.stack([eps[:, 0, 0], eps[:, 1, 1], 2 * eps[:, 0, 1]], axis=1)  # [ε_xx, ε_yy, γ_xy]
 
             if quantity == 'strain':
                 out = strain
@@ -483,5 +464,3 @@ class FE_2D:
             comp = dict(u=u_val, ux=u_val[:, 0], uy=u_val[:, 1])
             out = comp[quantity]
         return (out, inside) if return_status else out
-
-
