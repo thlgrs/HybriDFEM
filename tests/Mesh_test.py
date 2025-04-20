@@ -54,9 +54,9 @@ def cantilever(height, length, sort, size=0.05, plot=False):
 
 def gen_sizes(sizes=None):
     if sizes is None:
-        sizes = [1, 1 / 2, 1 / 5, 1 / 20, 1 / 50, 1 / 100, 1 / 200]
+        sizes = [1, 3/4, 1/2, 1/3, 1/4, 1/6, 1/8, 1/12, 1/16, 1/24, 1/32, 1/48, 1/64, 1/128]
     for size in sizes:
-        cantilever(0.3, 3, sort="tri", size=size)
+        cantilever(0.3, 3, sort="tri",  size=size)
         cantilever(0.3, 3, sort="quad", size=size)
 
 

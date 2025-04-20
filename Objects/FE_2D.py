@@ -15,6 +15,7 @@ from sfepy.discrete import (FieldVariable, Integral, Equation, Equations, Proble
 from sfepy.discrete.conditions import EssentialBC
 from sfepy.mechanics.matcoefs import stiffness_from_youngpoisson
 from sfepy.terms import Term
+from sfepy.terms.terms import Terms
 from sfepy.solvers.ls import ScipyDirect
 from sfepy.solvers.nls import Newton
 
@@ -343,7 +344,7 @@ class FE_2D:
         bb = self.domain.get_mesh_bounding_box()  # [[xmin,ymin],[xmax,ymax]]
         xmin, ymin = bb[0]
         xmax, ymax = bb[1]
-        gtol = 1e-8 * max(xmax - xmin, ymax - ymin)  # geometric tolerance
+        gtol = 1e-8
         self.select = {
             'all': lambda: 'all',
             'left': lambda: f'vertices in (x < {xmin + gtol:.10e})',
@@ -351,16 +352,13 @@ class FE_2D:
             'bottom': lambda: f'vertices in (y < {ymin + gtol:.10e})',
             'top': lambda: f'vertices in (y > {ymax - gtol:.10e})',
             'surface': lambda: 'vertices of surface',  # entire boundary,
-            'points_near': lambda x, y,
-                                  tol=1e-8: f'vertices in (x > {x-tol}) *v (x < {x+tol})*v (y > {y-tol}) *v (y < {y+tol})',
-            'points_on_x': lambda x, tol=1e-8: f'vertices in (x > {x-tol}) *v (x < {x+tol})',
-            'points_on_y': lambda y, tol=1e-8: f'vertices in (y > {y-tol}) *v (y < {y+tol})',
-            'points_between_x': lambda x1, x2: f'vertices in (x > {x1}) *v (x < {x2})',
-            'points_between_y': lambda y1, y2: f'vertices in (y > {y1}) *v (y < {y2})',
-            'points_on_x_between_y': lambda x, y1, y2,
-                                            tol=1e-8: f'vertices in (x > {x-tol}) *v (x < {x+tol}) *v (y > {y1}) *v (y < {y2})',
-            'points_on_y_between_x': lambda y, x1, x2,
-                                            tol=1e-8: f'vertices in (y > {y-tol}) *v (y < {y+tol}) *v (x > {x1}) *v (x < {x2})'
+            'points_near': lambda x, y: f'vertices in (x > {x-gtol:.10e}) *v vertices in (x < {x+gtol:.10e}) *v vertices in (y > {y-gtol:.10e}) *v vertices in (y < {y+gtol:.10e})',
+            'points_on_x': lambda x : f'vertices in (x > {x-gtol:.10e}) *v vertices in (x < {x+gtol:.10e})',
+            'points_on_y': lambda y : f'vertices in (y > {y-gtol:.10e}) *v vertices in (y < {y+gtol:.10e})',
+            'points_between_x': lambda x1, x2: f'vertices in (x > {x1}) *v vertices in (x < {x2})',
+            'points_between_y': lambda y1, y2: f'vertices in (y > {y1}) *v vertices in (y < {y2})',
+            'points_on_x_between_y': lambda x, y1, y2 : f'vertices in (x > {x-gtol:.10e}) *v vertices in (x < {x+gtol:.10e}) *v vertices in (y > {y1}) *v vertices in (y < {y2})',
+            'points_on_y_between_x': lambda y, x1, x2 : f'vertices in (y > {y-gtol:.10e}) *v vertices in (y < {y+gtol:.10e}) *v vertices in (x > {x1}) *v vertices in (x < {x2})'
         }
         # --- Regions ---------------------------------------------------------
         self.regions = {}
@@ -384,6 +382,7 @@ class FE_2D:
 
         # --- Containers for BCs and loads ------------------------------------
         self.ebcs = []  # EssentialBC objects
+        self.loads = {}
         self.load_terms = []  # surface traction terms
 
     def add_dirichlet(self, name: str, selector: str, comp_dict: dict, **kwargs):
@@ -394,35 +393,51 @@ class FE_2D:
         self.regions[name] = reg
         self.ebcs.append(EssentialBC(name, reg, comp_dict))
 
-    def add_surface_load(self, name: str, selector: str, px: float = 0, py: float = 0, kind: str = 'facet', **kwargs):
-        if not px == py == 0:
-            reg = self.domain.create_region(name, self.select[selector](**kwargs), kind=kind)
-            self.regions[name] = reg
-            load = sfepyMaterial(f'{name}', val=[[px], [py]])
-            self.load_terms.append(Term.new(f'dw_surface_ltr({name}.val, v)', self.integral, reg, load=load, v=self.v))
+    def add_surface_load(self, selector: str, px: float = 0, py: float = 0, **kwargs):
+        if px == 0.0 and py == 0.0:
+            return
+        idx = len(self.load_terms)
+        load_name = f'load_{idx}'
 
-    def add_point_load(self, name: str, x: float, y: float, force_vec, total: bool = False):
-        # STILL TO TEST
-        # build the vertex region
-        reg = self.domain.create_region(name, self.select['points_near'](x, y), kind='vertex')
-        n_vert = reg.vertices.shape[0]
-        if n_vert == 0:
-            raise ValueError(f"region '{name}' is empty – check selector!")
-        self.regions[name] = reg
+        load_val = np.array([[px], [py]], dtype=float)  # shape (2,1)
+        surf_load = sfepyMaterial(load_name, val=load_val)
 
-        force_vec = np.asarray(force_vec, dtype=np.float64).reshape(1, -1)
-        if total:
-            force_vec = force_vec / n_vert  # divide resultant force
+        expr = self.select[selector](**kwargs)
+        reg = self.domain.create_region(f'{load_name}_reg', expr, kind='facet')
 
-        # repeat row → shape (n_vert, ndim)
-        load_val = np.repeat(force_vec, n_vert, axis=0)
+        term = Term.new(f'dw_surface_ltr({load_name}.val, v)', self.integral, region=reg, **{load_name: surf_load}, v=self.v)
 
-        # material and term
-        mat_name = f'pload_{name}'
-        load = sfepyMaterial(mat_name, val=load_val)
-        term = Term.new(f'dw_point_load({mat_name}.val, v)', self.integral, reg, load=load, v=self.v)
-
+        self.regions[f'{load_name}_reg'] = reg
         self.load_terms.append(term)
+        self.loads[load_name] = surf_load
+
+    def add_point_load(self, x: float, y: float, fx:float = 0, fy:float = 0, total: bool = True):
+        # STILL TO TEST
+        if fx == 0.0 and fy == 0.0:
+            return  # nothing to do
+
+        idx = len(self.load_terms)
+        load_name = f'load_{idx}'
+
+        expr = self.select['points_near'](x=x, y=y)
+        reg = self.domain.create_region(f'{load_name}_reg', expr, kind='vertex')
+        n_vert = len(reg.vertices)
+        print(n_vert)
+        if n_vert == 0:
+            raise ValueError(
+                f"load region '{load_name}_reg' is empty – "
+                f"adjust selector/tolerance")
+
+        f_vec = np.array([fx,fy], dtype=float) # (2,)
+        if total: f_vec /= n_vert
+        load_val = np.tile(f_vec, (n_vert, 1)) # (n_vert, 2)
+
+        pload = sfepyMaterial(load_name, val=load_val)
+        term = Term.new(f'dw_point_load({load_name}.val, v)', self.integral, region=reg, **{load_name: pload}, v=self.v)
+
+        self.regions[f'{load_name}_reg'] = reg
+        self.load_terms.append(term)
+        self.loads[load_name] = pload
 
     def solve(self, vtk_out: str = None):
         """assemble, solve and store the converged state"""
@@ -431,9 +446,9 @@ class FE_2D:
         elif not vtk_out.endswith('.vtk'):
             vtk_out += '.vtk'
 
-        rhs = self.t_int
-        for lt in self.load_terms:
-            rhs = rhs - lt
+        term_list = [self.t_int] + [-lt for lt in self.load_terms]
+
+        rhs = term_list[0] if len(term_list) == 1 else Terms(term_list)
         eq = Equation('balance', rhs)
 
         pb = Problem('elasticity_2D', equations=Equations([eq]), domain=self.domain)
