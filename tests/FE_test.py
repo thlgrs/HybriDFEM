@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from pathlib import Path
 
-
+STEEL = Material(E=210e9, nu=0.30, plane='stress', rho=0)
+SIZES = [4, 2, 1, 3/4, 1/2, 1/3, 1/4, 1/6, 1/8, 1/12, 1/16, 1/24, 1/32] #1/48, 1/64, 1/128]#, 1/256]#, 1/512]
 
 def clear_suffix(suffixes, root='.'):
     if isinstance(suffixes, str):
@@ -26,8 +27,8 @@ def convergence(func, sizes=None, clear=False):
     if sizes is None:
         sizes = [1, 3/4, 1/2, 1/3, 1/4, 1/6, 1/8, 1/12, 1/16, 1/24, 1/32, 1/48, 1/64, 1/128]
     for size in sizes:
-        wq, nq = func(f'output/cantilever_quad{size}.msh')
-        wt, nt = func(f'output/cantilever_tri{size}.msh')
+        wq, nq = func(f'output/beam_quad{size}.msh')
+        wt, nt = func(f'output/beam_tri{size}.msh')
         n_elem[0].append(nt)
         w_tri.append(wt)
         n_elem[1].append(nq)
@@ -41,7 +42,7 @@ def convergence(func, sizes=None, clear=False):
 def error(approach, exact):
     err = []
     for a,e in zip(approach, exact):
-        err.append((e-a)/e)
+        err.append(100*(e-a)/e)
     return err
 
 def scientific_plot_latex(x, ys, labels=None, xlabel="", ylabel="", title="",
@@ -102,8 +103,7 @@ def scientific_plot_latex(x, ys, labels=None, xlabel="", ylabel="", title="",
 
 
 def cantilever_steel_beam_uniform_load(file):
-    steel = Material(E=210e9, nu=0.30, plane='stress', rho=0)
-    beam = FE_2D(file, material=steel)
+    beam = FE_2D(file, material=STEEL)
     min_x, max_x = beam.domain.get_mesh_bounding_box()[:, 0]
     mid_y = beam.domain.get_mesh_bounding_box()[:, 1].mean()
 
@@ -118,9 +118,26 @@ def cantilever_steel_beam_uniform_load(file):
     n_el = beam.domain.shape.n_el
     return uy[-1][0], n_el
 
+def simple_steel_beam_uniform_load(file):
+    beam = FE_2D(file, material=STEEL)
+    min_x, max_x = beam.domain.get_mesh_bounding_box()[:, 0]
+    mid_y = beam.domain.get_mesh_bounding_box()[:, 1].mean()
+
+    beam.add_dirichlet('left_sup', 'left', {'u.all': 0.0})
+    beam.add_dirichlet('right_sup', 'right', {'u.all': 0.0})
+    beam.add_surface_load('top', py= -1e6)
+
+    beam.solve()
+    xs = np.linspace(min_x, max_x, 50)
+    pts = np.column_stack([xs, np.full_like(xs, mid_y)])
+    uy = beam.probe(pts, 'uy')
+    mid_idx = len(uy)//2
+    print('flèche :', uy[mid_idx])
+    n_el = beam.domain.shape.n_el
+    return uy[mid_idx][0], n_el
+
 def cantilever_steel_point_load(file):
-    steel = Material(E=210e9, nu=0.30, plane='stress', rho=0)
-    beam = FE_2D(file, material=steel)
+    beam = FE_2D(file, material=STEEL)
     min_x, max_x = beam.domain.get_mesh_bounding_box()[:, 0]
     mid_y = beam.domain.get_mesh_bounding_box()[:, 1].mean()
 
@@ -135,28 +152,10 @@ def cantilever_steel_point_load(file):
     n_el = beam.domain.shape.n_el
     return uy[-1][0], n_el
 
-def plots_uniform_load_cantilever():
-    sizes = [1, 3/4, 1/2, 1/3, 1/4, 1/6, 1/8, 1/12, 1/16, 1/24, 1/32, 1/48, 1/64, 1/128, 1/256]#, 1/512]
-    clear_suffix(['.vtk', '.msh', '.png'], 'output')
-    gen_sizes(sizes)
-    w_tri, w_quad, n_elem = convergence(func=cantilever_steel_beam_uniform_load, sizes=sizes)
-    analytic = -np.ones_like(w_tri) * 0.021428 # Analytical deflection
-    errors = [error(w_tri, analytic), error(w_quad, analytic)]
-    scientific_plot_latex([n_elem[0], n_elem[1]], errors, labels=['tri_elem', 'quad_elem'],
-                          xlabel="Number of elements", ylabel=r"Error $[\%]$", save_path='output/uni_load_errors.png',
-                          title="Deflection error : Cantilever uniformly distributed load", use_latex=True)
-    scientific_plot_latex([n_elem[0], n_elem[1], n_elem[0]], [w_tri, w_quad, analytic],
-                          labels=['tri_elem', 'quad_elem', 'E-B solution'],
-                          xlabel="Number of elements", ylabel=r"Cantilever free hand deflection $[m]$",
-                          save_path='output/uni_load_deflection.png',
-                          title="Free end deflection : Cantilever uniformly distributed load", use_latex=True)
-    clear_suffix(['.vtk', '.msh'], 'output')
-
 def plots_point_load_cantilever():
-    sizes = [1/8]#, 3/4, 1/2, 1/3, 1/4, 1/6, 1/8, 1/12, 1/16, 1/24, 1/32, 1/48, 1/64, 1/128] #, 1/256, 1/512]
     clear_suffix(['.vtk', '.msh'], 'output')
-    gen_sizes(sizes)
-    w_tri, w_quad, n_elem = convergence(func=cantilever_steel_point_load, sizes=sizes)
+    gen_sizes(SIZES)
+    w_tri, w_quad, n_elem = convergence(func=cantilever_steel_point_load, sizes=SIZES)
     analytic = -np.ones_like(w_tri) * 0.019047619 # Analytical deflection
     errors = [error(w_tri, analytic), error(w_quad, analytic)]
     scientific_plot_latex([n_elem[0], n_elem[1]], errors, labels=['tri_elem', 'quad_elem'],
@@ -169,9 +168,43 @@ def plots_point_load_cantilever():
                           title="Free end deflection : Cantilever point load", use_latex=True)
     #clear_suffix(['.vtk', '.msh'], 'output')
 
+def plots_uniform_load_cantilever():
+    #clear_suffix(['.vtk', '.msh', '.png'], 'output')
+    #gen_sizes(SIZES)
+    w_tri, w_quad, n_elem = convergence(func=cantilever_steel_beam_uniform_load, sizes=SIZES)
+    analytic = -np.ones_like(w_tri) * (1/14) # Analytical deflection
+    errors = [error(w_tri, analytic), error(w_quad, analytic)]
+    scientific_plot_latex([n_elem[0], n_elem[1]], errors, labels=['tri_elem', 'quad_elem'],
+                          xlabel="Number of elements", ylabel=r"Error $[\%]$", save_path='output/uni_load_errors.png',
+                          title="Deflection error : Cantilever uniformly distributed load", use_latex=True)
+    scientific_plot_latex([n_elem[0], n_elem[1], n_elem[0]], [w_tri, w_quad, analytic],
+                          labels=['tri_elem', 'quad_elem', 'E-B solution'],
+                          xlabel="Number of elements", ylabel=r"Cantilever free hand deflection $[m]$",
+                          save_path='output/uni_load_deflection.png',
+                          title="Free end deflection : Cantilever uniformly distributed load", use_latex=True)
+    #clear_suffix(['.vtk', '.msh'], 'output')
+
+def plots_uniform_load_simple_beam():
+    #clear_suffix(['.vtk', '.msh'], 'output')
+    #gen_sizes(SIZES)
+    w_tri, w_quad, n_elem = convergence(func=simple_steel_beam_uniform_load, sizes=SIZES)
+    analytic = -np.ones_like(w_tri) * (1/672) # Analytical deflection
+    errors = [error(w_tri, analytic), error(w_quad, analytic)]
+    scientific_plot_latex([n_elem[0], n_elem[1]], errors, labels=['tri_elem', 'quad_elem'],
+                          xlabel="Number of elements", ylabel=r"Error $[\%]$", save_path='output/simple_beam_errors.png',
+                          title="Deflection error : Simple beam", use_latex=True)
+    scientific_plot_latex([n_elem[0], n_elem[1], n_elem[0]], [w_tri, w_quad, analytic],
+                          labels=['tri_elem', 'quad_elem', 'E-B solution'],
+                          xlabel="Number of elements", ylabel=r"Simple beam deflection $[m]$",
+                          save_path='output/simple_beam_deflection.png',
+                          title="Mid-span deflection : Simple beam load", use_latex=True)
+
 
 if __name__ == '__main__':
-    plots_point_load_cantilever()
+    #clear_suffix(['.vtk', '.msh','.png'], 'output')
+    #gen_sizes(SIZES)
+    plots_uniform_load_cantilever()
+    #plots_uniform_load_simple_beam()
 
 
 
