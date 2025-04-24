@@ -167,10 +167,8 @@ class Mesh:
         dic = {tag: idx for idx, tag in enumerate(tags_array)}
         return dic
 
-    def find_points(self,
-                    target_coords: Union[Tuple[float, float], List[Tuple[float, float]]],
-                    tolerance: float = 1e-6,
-                    ) -> List[int]:
+    def find_points(self, target_coords: Union[Tuple[float, float], List[Tuple[float, float]]],
+                    tolerance: float = 1e-6) -> List[int]:
         """
         Find mesh node tags whose coordinates match target_coords within a tolerance.
 
@@ -192,11 +190,7 @@ class Mesh:
                     matching_points.append(tag)
         return matching_points
 
-    def find_path(
-            self,
-            coord1: Tuple[float, float],
-            coord2: Tuple[float, float]
-    ) -> Optional[List[int]]:
+    def find_path( self, coord1: Tuple[float, float], coord2: Tuple[float, float]) -> Optional[List[int]]:
         """
         Find a path (sequence of node tags) between two coordinates using BFS on the connectivity graph.
 
@@ -244,9 +238,7 @@ class Mesh:
 
         return bfs_path(graph, start_node, end_node)
 
-    def find_elements(
-            self, coord: Tuple[float, float], tolerance: float = 1e-6
-    ) -> List[int]:
+    def find_elements(self, coord: Tuple[float, float], tolerance: float = 1e-6) -> List[int]:
         """
         Find element indices (for triangles and quadrangles) that contain the given coordinate.
 
@@ -388,7 +380,7 @@ class FE_2D:
             self.load_terms = []
             self.loads = {}
 
-    def build_selector(self, selector: Union[str, Callable[..., str]], **kwargs) -> str:
+    def selector(self, selector: Union[str, Callable[..., str]], **kwargs) -> str:
         """
         Turn a selector key/callable/raw‐string into a SfePy region expression.
 
@@ -454,7 +446,7 @@ class FE_2D:
         else:
             raise ValueError(f"op must be 'and' or 'or', got {op!r}")
 
-        parts = [self.build_selector(sel, **kwargs) for sel in selectors]
+        parts = [self.selector(sel, **kwargs) for sel in selectors]
         # wrap each part in parentheses if it’s more than a single token
         parts = [p if p.isidentifier() else f'({p})' for p in parts]
         expr = joiner.join(parts)
