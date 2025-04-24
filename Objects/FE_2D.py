@@ -1,23 +1,23 @@
 from collections import deque
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Union, Dict
+from typing import List, Tuple, Optional, Union, Dict, Callable
 
 import gmsh
-import meshio
 import matplotlib.pyplot as plt
+import meshio
+import numpy as np
 from matplotlib.collections import LineCollection
 from scipy.spatial import KDTree
-import numpy as np
+from sfepy.discrete import (FieldVariable, Integral, Equation, Equations, Problem, Conditions)
+from sfepy.discrete import Material as sfepyMaterial
+from sfepy.discrete.conditions import EssentialBC
 from sfepy.discrete.fem import FEDomain, Field
 from sfepy.discrete.fem import Mesh as sfepyMesh
-from sfepy.discrete import Material as sfepyMaterial
-from sfepy.discrete import (FieldVariable, Integral, Equation, Equations, Problem, Conditions)
-from sfepy.discrete.conditions import EssentialBC
 from sfepy.mechanics.matcoefs import stiffness_from_youngpoisson
-from sfepy.terms import Term
-from sfepy.terms.terms import Terms
 from sfepy.solvers.ls import ScipyDirect
 from sfepy.solvers.nls import Newton
+from sfepy.terms import Term
+from sfepy.terms.terms import Terms
 
 
 class Mesh:
@@ -34,7 +34,7 @@ class Mesh:
         if element_type not in ("triangle", "quad", "tri", "quadrilateral"):
             raise ValueError("element_type must be 'triangle'/'tri' or 'quadrilateral'/'quad'")
         self.points_list: List[Tuple[float, float]] = points
-        self.element_type: str = 'triangle' if element_type == 'triangle' or 'tri' else 'quad'
+        self.element_type = 'triangle' if element_type in ('triangle', 'tri') else 'quad'
         self.element_size: float = element_size
         self.file: str = f"{name}.msh"
         self.name: str = name
@@ -322,76 +322,215 @@ class Material:
     plane: str  # stress or strain
 
 
-class FE_2D:
+class FE_2D: 
     def __init__(self, mesh_file: str, material: Material, order: int = 1):
+            # --- Mesh & domain setup ------------------------------------------
+            self.mesh_name = mesh_file.removesuffix('.msh')
+            mesh = sfepyMesh.from_file(mesh_file)
+            if mesh.coors.shape[1] == 3:
+                mesh.coors[:, 2] = 0.0
+            mesh.write(f'{self.mesh_name}.vtk', io='auto')
+            mesh = sfepyMesh.from_file(f'{self.mesh_name}.vtk')
+
+            self.domain = FEDomain('domain', mesh)
+
+            # --- Bounding box & automatic gtol --------------------------------
+            bb = self.domain.get_mesh_bounding_box()  # [[xmin,ymin],[xmax,ymax]]
+            (xmin, ymin), (xmax, ymax) = bb
+
+            # build KD‐tree of node coords and get typical spacing h_typ
+            coords = mesh.coors[:, :2]
+            tree = KDTree(coords)
+            dists, _ = tree.query(coords, k=2)
+            h_typ = float(np.median(dists[:, 1]))
+
+            # gtol = fraction of h_typ, with safe fallback
+            self.gtol = max(1e-8, 1e-3 * h_typ)
+            tol = self.gtol
+
+            # --- Selector definitions -----------------------------------------
+            self.selector_list = {
+                'all': lambda: 'all',
+                'left': lambda: f'vertices in (x < {xmin + tol:.10e})',
+                'right': lambda: f'vertices in (x > {xmax - tol:.10e})',
+                'bottom': lambda: f'vertices in (y < {ymin + tol:.10e})',
+                'top': lambda: f'vertices in (y > {ymax - tol:.10e})',
+                'boundary': lambda: 'vertices of surface',
+                'line_at_x': lambda x: f'vertices in (x > {x - tol:.10e}) * (x < {x + tol:.10e})',
+                'line_at_y': lambda y: f'vertices in (y > {y - tol:.10e}) * (y < {y + tol:.10e})',
+                'box': lambda x0, x1, y0, y1: (
+                    f'vertices in (x > {x0 - tol:.10e}) * (x < {x1 + tol:.10e})'
+                    f' * (y > {y0 - tol:.10e}) * (y < {y1 + tol:.10e})'
+                ),
+            }
+
+            # --- Regions -------------------------------------------------------
+            self.regions = {}
+            # Omega = whole domain cells
+            self.regions['Omega'] = self.domain.create_region('Omega', 'all')
+
+            # --- Field & variables --------------------------------------------
+            self.field = Field.from_args('u_field', np.float64, 'vector',
+                                         self.regions['Omega'], approx_order=order)
+            self.u = FieldVariable('u', 'unknown', self.field)
+            self.v = FieldVariable('v', 'test', self.field, primary_var_name='u')
+
+            # --- Material & internal term -------------------------------------
+            self.D = stiffness_from_youngpoisson(2, material.E, material.nu, plane=material.plane)
+            self.mat = sfepyMaterial('mat', D=self.D)
+
+            self.integral = Integral('i', order=2)
+            self.t_int = Term.new('dw_lin_elastic(mat.D, v, u)', self.integral, self.regions['Omega'], 
+                                  mat=self.mat, v=self.v, u=self.u)
+
+            # --- BC & load containers -----------------------------------------
+            self.ebcs = []
+            self.load_terms = []
+            self.loads = {}
+
+    def build_selector(self, selector: Union[str, Callable[..., str]], **kwargs) -> str:
         """
+        Turn a selector key/callable/raw‐string into a SfePy region expression.
 
         Args:
-            mesh_file: filename of .msh file.
-            material: material to use.
-            order: field approximation order
+            selector:  one of
+                         - a key in self.selector_list (e.g. 'left', 'surface', …)
+                         - a callable returning a region‐string (must accept **kwargs)
+                         - a raw region expression string
+            **kwargs:  parameters passed to the above if needed
+
+        Returns:
+            A valid SfePy region‐expression string (e.g. 'vertices in (x < 1e-8) *v …').
+
+        Raises:
+            KeyError:   if selector is a str but not in self.selector_list and not looking like an expression.
+            TypeError:  if selector is neither str nor callable.
+            ValueError: if the resulting expression is empty.
         """
+        # 1) name → callable
+        if callable(selector):
+            expr = selector(**kwargs)
 
-        # --- Mesh and domain -------------------------------------------------
-        self.mesh_name = mesh_file.removesuffix('.msh')
-        mesh = sfepyMesh.from_file(mesh_file)
-        if mesh.coors.shape[1] == 3:  # flatten to x‑y plane if needed
-            mesh.coors[:, 2] = 0.0
-        mesh.write('{}.vtk'.format(self.mesh_name), io='auto')
-        mesh = sfepyMesh.from_file('{}.vtk'.format(self.mesh_name))
-        self.domain = FEDomain('domain', mesh)
+        # 2) string → lookup in self.selector_list
+        elif isinstance(selector, str) and selector in self.selector_list:
+            expr = self.selector_list[selector](**kwargs)
 
-        bb = self.domain.get_mesh_bounding_box()  # [[xmin,ymin],[xmax,ymax]]
-        xmin, ymin = bb[0]
-        xmax, ymax = bb[1]
-        gtol = 1e-8
-        self.select = {
-            'all': lambda: 'all',
-            'left': lambda: f'vertices in (x < {xmin + gtol:.10e})',
-            'right': lambda: f'vertices in (x > {xmax - gtol:.10e})',
-            'bottom': lambda: f'vertices in (y < {ymin + gtol:.10e})',
-            'top': lambda: f'vertices in (y > {ymax - gtol:.10e})',
-            'surface': lambda: 'vertices of surface',  # entire boundary,
-            'points_near': lambda x, y: f'vertices in (x > {x-gtol:.10e}) *v vertices in (x < {x+gtol:.10e}) *v vertices in (y > {y-gtol:.10e}) *v vertices in (y < {y+gtol:.10e})',
-            'points_on_x': lambda x : f'vertices in (x > {x-gtol:.10e}) *v vertices in (x < {x+gtol:.10e})',
-            'points_on_y': lambda y : f'vertices in (y > {y-gtol:.10e}) *v vertices in (y < {y+gtol:.10e})',
-            'points_between_x': lambda x1, x2: f'vertices in (x > {x1}) *v vertices in (x < {x2})',
-            'points_between_y': lambda y1, y2: f'vertices in (y > {y1}) *v vertices in (y < {y2})',
-            'points_on_x_between_y': lambda x, y1, y2 : f'vertices in (x > {x-gtol:.10e}) *v vertices in (x < {x+gtol:.10e}) *v vertices in (y > {y1}) *v vertices in (y < {y2})',
-            'points_on_y_between_x': lambda y, x1, x2 : f'vertices in (y > {y-gtol:.10e}) *v vertices in (y < {y+gtol:.10e}) *v vertices in (x > {x1}) *v vertices in (x < {x2})'
-        }
-        # --- Regions ---------------------------------------------------------
-        self.regions = {}
-        self.regions['Omega'] = self.domain.create_region('Omega', 'all')
+        # 3) raw expression string (heuristic: must contain at least one space or comparison)
+        elif isinstance(selector, str) and any(tok in selector for tok in (' ', '<', '>', '*', 'vertices', 'cells')):
+            expr = selector
 
-        # --- Field, variables ------------------------------------------------
-        self.field = Field.from_args('u_field', np.float64, 'vector',
-                                     self.regions['Omega'], approx_order=order)
-        self.u = FieldVariable('u', 'unknown', self.field)
-        self.v = FieldVariable('v', 'test', self.field, primary_var_name='u')
+        else:
+            raise KeyError(f"Selector '{selector}' not found in predefined selectors "
+                           f"and not a valid raw expression.")
 
-        # --- Material --------------------------------------------------------
-        self.D = stiffness_from_youngpoisson(2, material.E, material.nu, plane=material.plane)
-        self.mat = sfepyMaterial('mat', D=self.D)
+        expr = expr.strip()
+        if not expr:
+            raise ValueError("Built selector expression is empty.")
+        return expr
 
-        # --- Internal term (always present) ----------------------------------
-        self.integral = Integral('i', order=2)
-        self.t_int = Term.new('dw_lin_elastic(mat.D, v, u)',
-                              self.integral, self.regions['Omega'],
-                              mat=self.mat, v=self.v, u=self.u)
+    def combine_selectors(self, *selectors: Union[str, Callable[..., str]], op: str = 'and', **kwargs) -> str:
+        """
+        Build a combined SfePy selector expression by AND/OR-ing
+        any number of existing selectors or raw expressions.
 
-        # --- Containers for BCs and loads ------------------------------------
-        self.ebcs = []  # EssentialBC objects
-        self.loads = {}
-        self.load_terms = []  # surface traction terms
+        Args:
+            *selectors:  names in self.selector_list, callables, or raw expr strings
+            op:          'and' (default) or 'or'
+            **kwargs:    keyword args passed to each selector callable
+
+        Returns:
+            A single region‐expression string, e.g.
+            'vertices in (x < 0.1) * (y > 0.5)' or
+            'vertices in (...) *v vertices in (...)'.
+
+        Raises:
+            KeyError/TypeError/ValueError from build_selector if something’s wrong.
+        """
+        # pick the SfePy operator
+        if op == 'and':
+            joiner = ' * '
+        elif op == 'or':
+            joiner = ' *v '
+        else:
+            raise ValueError(f"op must be 'and' or 'or', got {op!r}")
+
+        parts = [self.build_selector(sel, **kwargs) for sel in selectors]
+        # wrap each part in parentheses if it’s more than a single token
+        parts = [p if p.isidentifier() else f'({p})' for p in parts]
+        expr = joiner.join(parts)
+        return expr
+
+    def create_region(self, name: str, selector: Union[str, Callable[..., str]],
+                      kind: str = 'cell', override: bool = False, **kwargs ):
+        """
+        Create and store a region in the model.
+
+        Args:
+            name:        the (unique) name of the new region.
+            selector:    either
+                           - a key of self.selector_list (e.g. 'left', 'surface', etc.),
+                           - a raw SfePy region expression string, or
+                           - a callable returning such a string.
+            kind:        one of 'cell', 'facet' or 'vertex'.
+            override:    if False (default), raises if `name` already exists.
+            **kwargs:    any parameters passed to the selector callable.
+
+        Returns:
+            The new region object.
+
+        Raises:
+            ValueError: if the region is empty or name already exists.
+            KeyError:   if selector is a string but not in self.selector_list.
+        """
+        # 1) check name
+        if (not override) and (name in self.regions):
+            raise ValueError(f"Region '{name}' already exists; use override=True to replace.")
+
+        # 2) build the SfePy‐style expression string
+        if callable(selector):
+            expr = selector(**kwargs)
+        elif isinstance(selector, str) and (selector in self.selector_list):
+            expr = self.selector_list[selector](**kwargs)
+        elif isinstance(selector, str):
+            expr = selector
+        else:
+            raise TypeError(f"Selector must be a str or callable, got {type(selector)}")
+
+        # 3) create region on the domain
+        region = self.domain.create_region(name, expr, kind=kind)
+
+        # 4) sanity check: must have at least one entity
+        count = getattr(region, {'cell': 'n_cells',
+                                 'facet': 'n_facets',
+                                 'vertex': 'n_vertices'}[kind])
+        if count == 0:
+            # clean up
+            del region
+            raise ValueError(f"Region '{name}' with expression '{expr}' is empty (kind={kind}).")
+
+        # 5) store and return
+        self.regions[name] = region
+        return region
 
     def add_dirichlet(self, name: str, selector: str, comp_dict: dict, **kwargs):
         """
         Fix a displacement component (or all) on a given boundary.
         """
-        reg = self.domain.create_region(name, self.select[selector](**kwargs), kind='facet')
+        reg = self.domain.create_region(name, self.selector_list[selector](**kwargs), kind='facet')
         self.regions[name] = reg
         self.ebcs.append(EssentialBC(name, reg, comp_dict))
+
+    def add_functional_dirichlet(self, name: str, selector: str, funcs: List[callable] = None, **kwargs) -> None:
+        expr = self.selector_list[selector](**kwargs)
+        reg = self.domain.create_region(name, expr, kind='facet')
+        self.regions[name] = reg
+        if funcs is None:
+            self.ebcs.append(EssentialBC(name, reg, {'u.all': 0.0}))
+        elif len(funcs) == 2:
+            self.ebcs.append(EssentialBC(name + 'x', reg, {'u.0': funcs[0]}))
+            self.ebcs.append(EssentialBC(name + 'y', reg, {'u.1': funcs[1]}))
+        else:
+            self.ebcs.append(EssentialBC(name, reg, {'u.all': funcs[0]}))
 
     def add_surface_load(self, selector: str, px: float = 0, py: float = 0, **kwargs):
         if px == 0.0 and py == 0.0:
@@ -402,42 +541,15 @@ class FE_2D:
         load_val = np.array([[px], [py]], dtype=float)  # shape (2,1)
         surf_load = sfepyMaterial(load_name, val=load_val)
 
-        expr = self.select[selector](**kwargs)
+        expr = self.selector_list[selector](**kwargs)
         reg = self.domain.create_region(f'{load_name}_reg', expr, kind='facet')
 
-        term = Term.new(f'dw_surface_ltr({load_name}.val, v)', self.integral, region=reg, **{load_name: surf_load}, v=self.v)
+        term = Term.new(f'dw_surface_ltr({load_name}.val, v)', self.integral, region=reg, **{load_name: surf_load},
+                        v=self.v)
 
         self.regions[f'{load_name}_reg'] = reg
         self.load_terms.append(term)
         self.loads[load_name] = surf_load
-
-    def add_point_load(self, x: float, y: float, fx:float = 0, fy:float = 0, total: bool = True):
-        # STILL TO TEST
-        if fx == 0.0 and fy == 0.0:
-            return  # nothing to do
-
-        idx = len(self.load_terms)
-        load_name = f'load_{idx}'
-
-        expr = self.select['points_near'](x=x, y=y)
-        reg = self.domain.create_region(f'{load_name}_reg', expr, kind='vertex')
-        n_vert = len(reg.vertices)
-        print(n_vert)
-        if n_vert == 0:
-            raise ValueError(
-                f"load region '{load_name}_reg' is empty – "
-                f"adjust selector/tolerance")
-
-        f_vec = np.array([fx,fy], dtype=float) # (2,)
-        if total: f_vec /= n_vert
-        load_val = np.tile(f_vec, (n_vert, 1)) # (n_vert, 2)
-
-        pload = sfepyMaterial(load_name, val=load_val)
-        term = Term.new(f'dw_point_load({load_name}.val, v)', self.integral, region=reg, **{load_name: pload}, v=self.v)
-
-        self.regions[f'{load_name}_reg'] = reg
-        self.load_terms.append(term)
-        self.loads[load_name] = pload
 
     def solve(self, vtk_out: str = None):
         """assemble, solve and store the converged state"""
