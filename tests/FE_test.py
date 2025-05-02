@@ -204,7 +204,7 @@ if __name__ == '__main__':
     #clear_suffix(['.vtk', '.msh','.png'], 'output')
     #gen_sizes(SIZES)
     plots_uniform_load_cantilever()
-    #plots_uniform_load_simple_beam()
+    plots_uniform_load_simple_beam()
 
 
 
