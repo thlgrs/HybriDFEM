@@ -84,5 +84,4 @@ def gen_sizes(sizes=None):
 
 
 if __name__ == "__main__":
-    test_methods()
-    # gen_sizes()
+    gen_sizes()
