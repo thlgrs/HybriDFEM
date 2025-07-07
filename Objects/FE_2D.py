@@ -1,680 +1,766 @@
-from collections import deque
-from dataclasses import dataclass
-from typing import List, Tuple, Optional, Union, Dict, Callable
-
+from typing import List, Tuple, Dict, Optional
 import gmsh
 import matplotlib.pyplot as plt
 import meshio
 import numpy as np
 from matplotlib.collections import LineCollection
-from scipy.spatial import KDTree
-from sfepy.discrete import (
-    FieldVariable,
-    Integral,
-    Equation,
-    Equations,
-    Problem,
-    Conditions,
-)
-from sfepy.discrete import Material as sfepyMaterial
-from sfepy.discrete.conditions import EssentialBC
-from sfepy.discrete.fem import FEDomain, Field
-from sfepy.discrete.fem import Mesh as sfepyMesh
-from sfepy.mechanics.matcoefs import stiffness_from_youngpoisson
-from sfepy.solvers.ls import ScipyDirect
-from sfepy.solvers.nls import Newton
-from sfepy.terms import Term
-from sfepy.terms.terms import Terms
+from scipy.sparse import lil_matrix
+from scipy.sparse.linalg import spsolve
 
 
-class Mesh:
+class FE_Mesh:
+    @staticmethod
+    def compute_physical_node_groups(mesh: meshio.Mesh) -> Dict[str, List[int]]:
+        """
+        Extracts mapping from physical group names to node indices for 1D groups (lines).
+        Returns:
+            {physical_name: [node_idx, ...]}
+        """
+        groups = {}
+        if 'line' in mesh.cells_dict:
+            for cell_block in mesh.cells:
+                if cell_block.type == "line":
+                    if "gmsh:physical" in cell_block.data:
+                        phys_names = cell_block.data["gmsh:physical"]
+                        for nodes, name in zip(cell_block.data, phys_names):
+                            groups.setdefault(name, []).extend(nodes)
+            for name, nodes in groups.items():
+                groups[name] = sorted(set(nodes))
+        return groups
+
     def __init__(
-        self,
-        points: List[Tuple[float, float]],
-        element_type: str,
-        element_size: float,
-        name: str = "myMesh",
+            self,
+            points: Optional[List[Tuple[float, float]]] = None,
+            mesh_file: Optional[str] = None,
+            element_type: str = 'triangle',
+            element_size: float = 0.1,
+            order: int = 1,  # New parameter: 1 for linear, 2 for quadratic
+            name: str = 'myMesh',
+            boundary_groups: Optional[Dict[str, List[int]]] = None,
     ):
-        """
-        Initialize, modify and generate a mesh object.
-        Args:
-            points: list of points forming the edge of the mesh
-            element_type: "triangle", "quad", "tri", "quadrilateral"
-            element_size: size of elements
-            name: name of the mesh
-        """
-        if element_type not in ("triangle", "quad", "tri", "quadrilateral"):
-            raise ValueError(
-                "element_type must be 'triangle'/'tri' or 'quadrilateral'/'quad'"
-            )
-        self.points_list: List[Tuple[float, float]] = points
-        self.element_type = (
-            "triangle" if element_type in ("triangle", "tri") else "quad"
-        )
-        self.element_size: float = element_size
-        self.file: str = f"{name}.msh"
-        self.name: str = name
-        self.generated: int = 0
-        gmsh.initialize()  # initialize gmsh
+        if points is None and mesh_file is None:
+            raise ValueError("Provide either `points` or `mesh_file`.")
+        self.points_list = points
+        self.mesh_file = mesh_file
+        self.element_type = 'triangle' if element_type in ('triangle', 'tri') else 'quad'
+        self.element_size = element_size
+        self.order = order  # Store element order
+        self.name = name
+        self.boundary_groups = boundary_groups or {}
+        self._mesh: Optional[meshio.Mesh] = None
+        self.generated = False
 
-    def clear_mesh(self) -> None:
-        gmsh.model.remove()
-        self.generated = 0
+        if self.points_list is not None:
+            gmsh.initialize()
+            gmsh.option.setNumber("General.Terminal", 1)  # Enable console output
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.points_list is not None:
+            gmsh.finalize()
 
     def generate_mesh(self) -> None:
+        if self.points_list is None:
+            raise RuntimeError("Cannot generate: no geometry defined.")
+
         gmsh.model.add(self.name)
-        gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)  # compatibility with sfepy
-        point_tags = [
-            gmsh.model.geo.addPoint(x, y, 0, meshSize=self.element_size)
-            for (x, y) in self.points_list
-        ]
 
-        num_points = len(point_tags)
-        line_tags = [
-            gmsh.model.geo.addLine(point_tags[i], point_tags[(i + 1) % num_points])
-            for i in range(num_points)
-        ]
-
-        cl = gmsh.model.geo.addCurveLoop(line_tags)
+        # Create points and lines
+        pts = [gmsh.model.geo.addPoint(x, y, 0, self.element_size)
+               for x, y in self.points_list]
+        lines = [gmsh.model.geo.addLine(pts[i], pts[(i + 1) % len(pts)])
+                 for i in range(len(pts))]
+        cl = gmsh.model.geo.addCurveLoop(lines)
         surface = gmsh.model.geo.addPlaneSurface([cl])
+
         gmsh.model.geo.synchronize()
 
-        # Add physical groups /!\ IMPORTANT FOR BC'S /!\ maybe not
-        gmsh.model.add_physical_group(dim=2, tags=[surface], name="domain", tag=1)
-        gmsh.model.add_physical_group(dim=1, tags=line_tags, name="boundary", tag=2)
-        for i, line_tag in enumerate(line_tags):
-            gmsh.model.add_physical_group(
-                dim=1, tags=[line_tag], name="line {}".format(i + 1), tag=10 + i
-            )
+        # Create physical groups
+        domain = gmsh.model.addPhysicalGroup(2, [surface])
+        gmsh.model.setPhysicalName(2, domain, "domain")
 
-        if self.element_type == "quad":
+        # Create boundary groups
+        for name, line_indices in self.boundary_groups.items():
+            actual_lines = [lines[i] for i in line_indices]
+            phys = gmsh.model.addPhysicalGroup(1, actual_lines)
+            gmsh.model.setPhysicalName(1, phys, name)
+
+        # Set mesh options
+        if self.element_type == 'quad':
             gmsh.model.mesh.setRecombine(2, surface)
+        gmsh.option.setNumber("Mesh.Algorithm", 6)  # Frontal-Delaunay
+        gmsh.option.setNumber("Mesh.ElementOrder", self.order)  # Use specified order
+
+        # Generate 2D mesh
         gmsh.model.mesh.generate(2)
-        gmsh.write(self.file)
-        self.generated += 1
+
+        # Write mesh file
+        filename = self.mesh_file or f"{self.name}.msh"
+        gmsh.write(filename)
+        self.mesh_file = filename
+        self.generated = True
+        self._mesh = meshio.read(self.mesh_file)
+
+        # Print meshio's interpretation
+        print("\nMeshio Physical Groups:")
+        for name, (tag, dim) in self._mesh.field_data.items():
+            print(f"  '{name}': tag={tag}, dim={dim}")
 
     def read_mesh(self) -> meshio.Mesh:
-        return meshio.read(self.file)
+        if self._mesh is None:
+            if self.mesh_file is None:
+                raise RuntimeError("No mesh available.")
+            self._mesh = meshio.read(self.mesh_file)
+        return self._mesh
 
     def nodes(self) -> np.ndarray:
-        """
-        Return the 2D coordinates of mesh nodes.
-        """
-        mesh = self.read_mesh()
-        return mesh.points[:, :2]
+        return self.read_mesh().points[:, :2]
 
-    def lines(self) -> List[np.ndarray]:
-        """
-        Return connectivity of line elements.
-        """
-        mesh = self.read_mesh()
-        return mesh.cells_dict.get("line", [])
+    def elements(self) -> np.ndarray:
+        """Return elements based on element type and order"""
+        if self.element_type == 'triangle':
+            key = 'triangle6' if self.order == 2 else 'triangle'
+        else:  # quad
+            key = 'quad8' if self.order == 2 else 'quad'
+        return self.read_mesh().cells_dict.get(key, np.empty((0,)))
 
-    def elements(self) -> List[np.ndarray]:
-        """
-        Return connectivity of elements (triangles or quadrangles).
-        """
-        mesh = self.read_mesh()
-        if self.element_type == "quad":
-            return mesh.cells_dict.get("quad", [])
-        else:
-            return mesh.cells_dict.get("triangle", [])
-
-    def add_point(self, x: float, y: float, regen: bool = False) -> None:
-        """
-        Append a new point to the geometry. If regen is True, clear and regenerate the mesh.
-        """
-        if self.generated:
-            self.clear_mesh()
-        self.points_list.append((x, y))
-        if regen:
-            self.generate_mesh()
-
-    def change_size(self, new_size: float, regen: bool = False) -> None:
-        """
-        Change the mesh element size. Clears and regenerates the mesh if already generated.
-        """
-        if self.generated:
-            self.clear_mesh()
-        self.element_size = new_size
-        if regen:
-            self.generate_mesh()
-
-    def change_type(self, new_type: str, regen: bool = False) -> None:
-        """
-        Change the element type ("triangle" or "quad"). Clears and regenerates the mesh if already generated.
-        """
-        if new_type not in ("triangle", "quad"):
-            raise ValueError("element_type must be 'triangle' or 'quad'")
-        if self.generated:
-            self.clear_mesh()
-        self.element_type = new_type
-        if regen:
-            self.generate_mesh()
+    def physical_line_groups(self) -> Dict[str, List[int]]:
+        return self.compute_physical_node_groups(self.read_mesh())
 
     def plot(self, save_path: Optional[str] = None) -> None:
-        """
-        Plot the mesh using matplotlib.
-
-        Parameters:
-            save_path: If provided, the plot is saved to this file.
-        """
         mesh = self.read_mesh()
-        points = mesh.points
-        lines_list: List[List[np.ndarray]] = []
-        for cell_type, elements in mesh.cells_dict.items():
-            if cell_type in ("line", "triangle", "quad"):
-                for element in elements:
-                    n = len(element)
+        pts = mesh.points
+        segments = []
+
+        for cell_block in mesh.cells:
+            if cell_block.type == "line":
+                for line in cell_block.data:
+                    p0 = pts[line[0]][:2]  # Extract only x,y
+                    p1 = pts[line[1]][:2]
+                    segments.append([p0, p1])
+            elif cell_block.type in ["triangle", "triangle6"]:
+                for tri in cell_block.data:
+                    points = [pts[i][:2] for i in tri]  # Get 2D points
+                    n = len(points)
                     for i in range(n):
-                        start = element[i]
-                        end = element[(i + 1) % n]
-                        lines_list.append([points[start][:2], points[end][:2]])
-        line_segments = LineCollection(lines_list, linewidths=0.5, colors="black")
+                        segments.append([points[i], points[(i + 1) % n]])
+            elif cell_block.type in ["quad", "quad8"]:
+                for quad in cell_block.data:
+                    points = [pts[i][:2] for i in quad]  # Get 2D points
+                    n = len(points)
+                    for i in range(n):
+                        segments.append([points[i], points[(i + 1) % n]])
+
+        lc = LineCollection(segments, linewidths=0.5, colors='k')
         fig, ax = plt.subplots()
-        ax.add_collection(line_segments)
+        ax.add_collection(lc)
         ax.autoscale()
-        ax.set_aspect("equal")
-        ax.set_title("2D Mesh Visualization")
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
+        ax.set_aspect('equal')
+        ax.set_title(f"{self.name} ({self.element_type} mesh, order={self.order})")
+
         if save_path:
             plt.savefig(save_path)
-        plt.show()
+            plt.close()
+        else:
+            plt.show()
 
-    def _node_tag_to_index(self):
+
+class FE_Material:
+    def __init__(self, E: float, nu: float, rho: float, plane: str):
+        self.E = E
+        self.nu = nu
+        self.rho = rho
+        self.plane = plane.lower()
+        self.D = self._make_D()
+
+    def _make_D(self):
+        E, v = self.E, self.nu
+        if self.plane == "stress":
+            return (E / (1 - v ** 2)) * np.array([
+                [1, v, 0],
+                [v, 1, 0],
+                [0, 0, (1 - v) / 2]
+            ])
+        elif self.plane == "strain":
+            factor = E * (1 - v) / ((1 + v) * (1 - 2 * v))
+            return factor * np.array([
+                [1, v / (1 - v), 0],
+                [v / (1 - v), 1, 0],
+                [0, 0, (1 - 2 * v) / (2 * (1 - v))]
+            ])
+        else:
+            raise ValueError("Material.plane must be 'stress' or 'strain'")
+
+
+class FE:
+    @staticmethod
+    def element_stiffness_T3(coords: np.ndarray, D: np.ndarray, t: float = 1.0) -> np.ndarray:
+        """Stiffness matrix for 3-node triangle element."""
+        x1, y1 = coords[0]
+        x2, y2 = coords[1]
+        x3, y3 = coords[2]
+
+        # Area calculation (absolute value for robustness)
+        A = 0.5 * abs((x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1))
+
+        # Shape function derivatives
+        b = np.array([y2 - y3, y3 - y1, y1 - y2])
+        c = np.array([x3 - x2, x1 - x3, x2 - x1])
+
+        # Strain-displacement matrix
+        B = np.zeros((3, 6))
+        for i in range(3):
+            B[0, 2 * i] = b[i]
+            B[1, 2 * i + 1] = c[i]
+            B[2, 2 * i] = c[i]
+            B[2, 2 * i + 1] = b[i]
+        B /= (2 * A)
+
+        # Element stiffness matrix
+        return t * A * (B.T @ D @ B)
+
+    @staticmethod
+    def element_stiffness_T6(coords: np.ndarray, D: np.ndarray, t: float = 1.0) -> np.ndarray:
         """
-        Build a mapping from gmsh node tag to index in the node coordinate array.
+        Stiffness matrix for 6-node quadratic triangle element.
+        coords: (3,2) array of triangle corner coordinates.
         """
-        node_tags, _, _ = gmsh.model.mesh.getNodes()
-        tags_array = np.array(node_tags)
-        dic = {tag: idx for idx, tag in enumerate(tags_array)}
-        return dic
+        # Compute full T6 coords: 3 corners + 3 mid-edges
+        corner = coords  # shape (3,2)
+        m12 = 0.5 * (corner[0] + corner[1])
+        m23 = 0.5 * (corner[1] + corner[2])
+        m31 = 0.5 * (corner[2] + corner[0])
+        full_coords = np.vstack([corner, m12, m23, m31])  # shape (6,2)
 
-    def find_points(
-        self,
-        target_coords: Union[Tuple[float, float], List[Tuple[float, float]]],
-        tolerance: float = 1e-6,
-    ) -> List[int]:
+        # 3-point Gaussian integration on reference triangle
+        gauss = [((2 / 3, 1 / 6), 1 / 3), ((1 / 6, 2 / 3), 1 / 3), ((1 / 6, 1 / 6), 1 / 3)]
+        Ke = np.zeros((12, 12))
+
+        for (xi, eta), w in gauss:
+            L1, L2 = xi, eta
+            L3 = 1 - xi - eta
+
+            # Shape function derivatives in natural (barycentric) coords
+            dN_dxi = np.array([4 * L1 - 1, 0, 1 - 4 * L3, 4 * L2, -4 * L2, 4 * (L3 - L1)])
+            dN_deta = np.array([0, 4 * L2 - 1, 1 - 4 * L3, 4 * L1, 4 * (L3 - L2), -4 * L1])
+
+            # Jacobian matrix
+            J = np.zeros((2, 2))
+            for i in range(6):
+                J[0, 0] += dN_dxi[i] * full_coords[i, 0]
+                J[0, 1] += dN_deta[i] * full_coords[i, 0]
+                J[1, 0] += dN_dxi[i] * full_coords[i, 1]
+                J[1, 1] += dN_deta[i] * full_coords[i, 1]
+
+            detJ = np.linalg.det(J)
+            if detJ <= 0:
+                raise ValueError(f"Negative Jacobian determinant: {detJ}")
+
+            invJ = np.linalg.inv(J)
+
+            # Strain-displacement matrix
+            B = np.zeros((3, 12))
+            for i in range(6):
+                dN = invJ @ np.array([dN_dxi[i], dN_deta[i]])
+                B[0, 2 * i] = dN[0]
+                B[1, 2 * i + 1] = dN[1]
+                B[2, 2 * i] = dN[1]
+                B[2, 2 * i + 1] = dN[0]
+
+            Ke += t * (B.T @ D @ B) * detJ * w
+
+        return Ke
+
+    @staticmethod
+    def element_stiffness_Q4(coords: np.ndarray, D: np.ndarray, t: float = 1.0) -> np.ndarray:
+        """Stiffness matrix for 4-node quadrilateral element."""
+        gp = 1.0 / np.sqrt(3.0)
+        points = [(-gp, -gp), (gp, -gp), (gp, gp), (-gp, gp)]
+        Ke = np.zeros((8, 8))
+
+        for xi, eta in points:
+            # Shape function derivatives
+            dN_dxi = 0.25 * np.array([
+                -(1 - eta), (1 - eta), (1 + eta), -(1 + eta)
+            ])
+            dN_deta = 0.25 * np.array([
+                -(1 - xi), -(1 + xi), (1 + xi), (1 - xi)
+            ])
+
+            # Jacobian matrix
+            J = np.zeros((2, 2))
+            for i in range(4):
+                J[0, 0] += dN_dxi[i] * coords[i, 0]
+                J[0, 1] += dN_deta[i] * coords[i, 0]
+                J[1, 0] += dN_dxi[i] * coords[i, 1]
+                J[1, 1] += dN_deta[i] * coords[i, 1]
+
+            detJ = np.linalg.det(J)
+            if detJ <= 0:
+                raise ValueError(f"Negative Jacobian determinant: {detJ}")
+
+            invJ = np.linalg.inv(J)
+
+            # Strain-displacement matrix
+            B = np.zeros((3, 8))
+            for i in range(4):
+                dN = invJ @ np.array([dN_dxi[i], dN_deta[i]])
+                B[0, 2 * i] = dN[0]
+                B[1, 2 * i + 1] = dN[1]
+                B[2, 2 * i] = dN[1]
+                B[2, 2 * i + 1] = dN[0]
+
+            Ke += t * (B.T @ D @ B) * detJ
+
+        return Ke
+
+    @staticmethod
+    def element_stiffness_Q8(coords: np.ndarray, D: np.ndarray, t: float = 1.0) -> np.ndarray:
         """
-        Find mesh node tags whose coordinates match target_coords within a tolerance.
-
-        Parameters:
-            target_coords: A tuple (x, y) or list of such tuples.
-            tolerance: Tolerance for matching coordinates.
-
-        Returns:
-            List of matching node tags.
+        Stiffness matrix for 8-node serendipity quadrilateral element.
+        coords: (4,2) array of quad corner coordinates.
         """
-        node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
-        node_coords = np.array(node_coords).reshape(-1, 3)[:, :2]
-        if isinstance(target_coords[0], (float, int)):
-            target_coords = [target_coords]  # type: ignore
-        matching_points: List[int] = []
-        for target in target_coords:
-            for tag, coord in zip(node_tags, node_coords):
-                if np.allclose(coord, target, atol=tolerance):
-                    matching_points.append(tag)
-        return matching_points
+        # Compute full Q8 coords: 4 corners + 4 mid-edges
+        corner = coords  # shape (4,2)
+        m12 = 0.5 * (corner[0] + corner[1])
+        m23 = 0.5 * (corner[1] + corner[2])
+        m34 = 0.5 * (corner[2] + corner[3])
+        m41 = 0.5 * (corner[3] + corner[0])
+        full_coords = np.vstack([corner, m12, m23, m34, m41])  # shape (8,2)
 
-    def find_path(
-        self, coord1: Tuple[float, float], coord2: Tuple[float, float]
-    ) -> Optional[List[int]]:
-        """
-        Find a path (sequence of node tags) between two coordinates using BFS on the connectivity graph.
+        # 3x3 Gauss rule
+        pts = [-np.sqrt(3 / 5), 0, np.sqrt(3 / 5)]
+        wts = [5 / 9, 8 / 9, 5 / 9]
+        Ke = np.zeros((16, 16))
 
-        Parameters:
-            coord1: Starting coordinate.
-            coord2: Ending coordinate.
+        for i, xi in enumerate(pts):
+            for j, eta in enumerate(pts):
+                # Shape function derivatives
+                dN_dxi = np.array([
+                    0.25 * (1 - eta) * (2 * xi + eta),
+                    0.25 * (1 - eta) * (2 * xi - eta),
+                    0.25 * (1 + eta) * (2 * xi + eta),
+                    0.25 * (1 + eta) * (2 * xi - eta),
+                    -xi * (1 - eta),
+                    0.5 * (1 - eta ** 2),
+                    -xi * (1 + eta),
+                    -0.5 * (1 - eta ** 2)
+                ])
 
-        Returns:
-            A list of node tags representing the path, or None if not found.
-        """
-        node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
-        node_coords = np.array(node_coords).reshape(-1, 3)[:, :2]
-        kdtree = KDTree(node_coords)
-        start_idx = kdtree.query(coord1, k=1)[1]
-        end_idx = kdtree.query(coord2, k=1)[1]
-        start_node = node_tags[start_idx]
-        end_node = node_tags[end_idx]
+                dN_deta = np.array([
+                    0.25 * (1 - xi) * (2 * eta + xi),
+                    0.25 * (1 + xi) * (2 * eta - xi),
+                    0.25 * (1 + xi) * (2 * eta + xi),
+                    0.25 * (1 - xi) * (2 * eta - xi),
+                    -0.5 * (1 - xi ** 2),
+                    -eta * (1 + xi),
+                    0.5 * (1 - xi ** 2),
+                    -eta * (1 - xi)
+                ])
 
-        # obtain connectivity for 1D elements (lines)
-        _, _, element_tags = gmsh.model.mesh.getElements(1)
-        if not element_tags:
-            return None
-        line_connectivity = np.array(element_tags[0]).reshape(-1, 2)
-        graph: Dict[int, List[int]] = {}
-        for n1, n2 in line_connectivity:
-            graph.setdefault(n1, []).append(n2)
-            graph.setdefault(n2, []).append(n1)
+                # Jacobian matrix
+                J = np.zeros((2, 2))
+                for k in range(8):
+                    J[0, 0] += dN_dxi[k] * full_coords[k, 0]
+                    J[0, 1] += dN_deta[k] * full_coords[k, 0]
+                    J[1, 0] += dN_dxi[k] * full_coords[k, 1]
+                    J[1, 1] += dN_deta[k] * full_coords[k, 1]
 
-        def bfs_path(
-            graph: Dict[int, List[int]], start: int, end: int
-        ) -> Optional[List[int]]:
-            queue = deque([(start, [start])])
-            visited = set()
-            while queue:
-                current, path = queue.popleft()
-                if current == end:
-                    return path
-                if current in visited:
-                    continue
-                visited.add(current)
-                for neighbor in graph.get(current, []):
-                    if neighbor not in visited:
-                        queue.append((neighbor, path + [neighbor]))
-            return None
+                detJ = np.linalg.det(J)
+                if detJ <= 0:
+                    raise ValueError(f"Negative Jacobian determinant: {detJ}")
 
-        return bfs_path(graph, start_node, end_node)
+                invJ = np.linalg.inv(J)
 
-    def find_elements(
-        self, coord: Tuple[float, float], tolerance: float = 1e-6
-    ) -> List[int]:
-        """
-        Find element indices (for triangles and quadrangles) that contain the given coordinate.
+                # Strain-displacement matrix
+                B = np.zeros((3, 16))
+                for k in range(8):
+                    dN = invJ @ np.array([dN_dxi[k], dN_deta[k]])
+                    B[0, 2 * k] = dN[0]
+                    B[1, 2 * k + 1] = dN[1]
+                    B[2, 2 * k] = dN[1]
+                    B[2, 2 * k + 1] = dN[0]
 
-        Parameters:
-            coord: Coordinate to test.
-            tolerance: Tolerance for geometric tests.
+                Ke += t * (B.T @ D @ B) * detJ * wts[i] * wts[j]
 
-        Returns:
-            List of element indices (starting at 1) that contain the coordinate.
-        """
-        node_tags, node_coords, _ = gmsh.model.mesh.getNodes()
-        node_coords = np.array(node_coords).reshape(-1, 3)[:, :2]
-        mapping = self._node_tag_to_index()
-        surface_dim = 2
-        _, _, elem_nodes = gmsh.model.mesh.getElements(surface_dim)
-        triangle_nodes: np.ndarray = np.array([])
-        quad_nodes: np.ndarray = np.array([])
-        if elem_nodes:
-            if elem_nodes[0]:
-                triangle_nodes = np.array(elem_nodes[0]).reshape(-1, 3)
-            if len(elem_nodes) > 1 and elem_nodes[1]:
-                quad_nodes = np.array(elem_nodes[1]).reshape(-1, 4)
+        return Ke
 
-        def is_point_in_triangle(
-            p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray
-        ) -> bool:
-            v0 = c - a
-            v1 = b - a
-            v2 = p - a
-            dot00 = np.dot(v0, v0)
-            dot01 = np.dot(v0, v1)
-            dot02 = np.dot(v0, v2)
-            dot11 = np.dot(v1, v1)
-            dot12 = np.dot(v1, v2)
-            denom = dot00 * dot11 - dot01 * dot01
-            if abs(denom) < tolerance:
-                return False
-            inv_denom = 1 / denom
-            u = (dot11 * dot02 - dot01 * dot12) * inv_denom
-            v = (dot00 * dot12 - dot01 * dot02) * inv_denom
-            return (u >= -tolerance) and (v >= -tolerance) and (u + v <= 1 + tolerance)
+    def __init__(self, mesh: FE_Mesh, material: FE_Material, thickness: float = 1.0):
+        # Read mesh
+        self.mesh = mesh.read_mesh()
+        self.nodes = mesh.nodes()
 
-        def is_point_in_quad(
-            p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray
-        ) -> bool:
-            # check by splitting the quad into two triangles
-            return is_point_in_triangle(p, a, b, d) or is_point_in_triangle(p, b, c, d)
+        # Extract elements based on element type and order
+        self.triangles = []
+        self.quads = []
 
-        matching_elements: List[int] = []
-        # check triangles
-        for i, nodes in enumerate(triangle_nodes):
-            try:
-                indices = [mapping[node] for node in nodes]
-            except KeyError:
+        if mesh.element_type == 'triangle':
+            if mesh.order == 1:
+                self.triangles = self.mesh.cells_dict.get("triangle", np.empty((0, 3), dtype=int))
+            else:  # order=2
+                self.triangles = self.mesh.cells_dict.get("triangle6", np.empty((0, 6), dtype=int))
+        else:  # quad
+            if mesh.order == 1:
+                self.quads = self.mesh.cells_dict.get("quad", np.empty((0, 4), dtype=int))
+            else:  # order=2
+                self.quads = self.mesh.cells_dict.get("quad8", np.empty((0, 8), dtype=int))
+
+        # Physical groups - FIXED ORDER: (tag, dimension)
+        self.physical_groups = {}
+        print("\nPhysical groups found:")
+
+        # CORRECTED: field_data items are (tag, dimension)
+        for name, (tag, dim) in self.mesh.field_data.items():
+            group = {"tag": tag, "dim": dim, "cells": {}}
+
+            # Find cells in cell_sets_dict
+            if name in self.mesh.cell_sets_dict:
+                group["cells"] = self.mesh.cell_sets_dict[name]
+
+            self.physical_groups[name] = group
+            print(f"  '{name}': dim={dim}, tag={tag}, cells={len(group['cells'])} blocks")
+
+        # Material properties
+        self.material = material
+        self.t = thickness
+        self.D = material.D
+
+        # Initialize system matrices
+        self.n_nodes = self.nodes.shape[0]
+        self.ndof = 2 * self.n_nodes
+        self.K = lil_matrix((self.ndof, self.ndof))
+        self.F = np.zeros(self.ndof)
+        self.u = np.zeros(self.ndof)
+
+    def assemble_stiffness_matrix(self):
+        """Assemble global stiffness matrix from all elements."""
+        # Process triangles
+        for conn in self.triangles:
+            coords = self.nodes[conn]
+            if len(conn) == 3:  # T3 element
+                Ke = FE.element_stiffness_T3(coords, self.D, self.t)
+            elif len(conn) == 6:  # T6 element
+                Ke = FE.element_stiffness_T6(coords, self.D, self.t)
+            else:
+                raise ValueError(f"Unsupported triangle element with {len(conn)} nodes")
+            self.assemble_global(Ke, conn)
+
+        # Process quads
+        for conn in self.quads:
+            coords = self.nodes[conn]
+            if len(conn) == 4:  # Q4 element
+                Ke = FE.element_stiffness_Q4(coords, self.D, self.t)
+            elif len(conn) == 8:  # Q8 element
+                Ke = FE.element_stiffness_Q8(coords, self.D, self.t)
+            else:
+                raise ValueError(f"Unsupported quad element with {len(conn)} nodes")
+            self.assemble_global(Ke, conn)
+
+    def assemble_global(self, Ke: np.ndarray, node_ids: List[int]) -> None:
+        """Assemble element stiffness matrix into global system."""
+        nd = len(node_ids)
+        dofs = []
+        for n in node_ids:
+            dofs.extend([2 * n, 2 * n + 1])
+
+        # Optimized assembly
+        for i in range(2 * nd):
+            for j in range(2 * nd):
+                self.K[dofs[i], dofs[j]] += Ke[i, j]
+
+    def dirichlet_bc(self, bc_dict: Dict[int, float]) -> None:
+        """Apply Dirichlet boundary conditions."""
+        for dof, val in bc_dict.items():
+            self.K[dof, :] = 0
+            self.K[:, dof] = 0
+            self.K[dof, dof] = 1.0
+            self.F[dof] = val
+
+    def neumann_bc(self, traction_edges: List[Tuple[Tuple[int, int], Tuple[float, float]]]) -> None:
+        """Apply Neumann boundary conditions."""
+        for (n1, n2), (tx, ty) in traction_edges:
+            x1, y1 = self.nodes[n1]
+            x2, y2 = self.nodes[n2]
+            L = np.hypot(x2 - x1, y2 - y1)
+            fe = (self.t * L / 2) * np.array([tx, ty, tx, ty])
+            dofs = [2 * n1, 2 * n1 + 1, 2 * n2, 2 * n2 + 1]
+            for idx, dof in enumerate(dofs):
+                self.F[dof] += fe[idx]
+
+    def dirichlet_on_group(self, group_name: str, ux: Optional[float] = None, uy: Optional[float] = None) -> None:
+        """Apply Dirichlet BCs to a physical group, including mid-side nodes for quadratic elements."""
+        if group_name not in self.physical_groups:
+            raise KeyError(f"Physical group '{group_name}' not found")
+
+        group = self.physical_groups[group_name]
+        nodes = set()
+
+        # Collect nodes from all cell types in the group
+        for cell_type, elem_ids in group["cells"].items():
+            conn = self.mesh.cells_dict[cell_type]
+            for eid in elem_ids:
+                # For quadratic elements, include all nodes (not just corners)
+                nodes.update(conn[eid])
+
+        # Apply BCs
+        bc = {}
+        for n in nodes:
+            if ux is not None:
+                bc[2 * n] = ux
+            if uy is not None:
+                bc[2 * n + 1] = uy
+        self.dirichlet_bc(bc)
+
+    def neumann_on_group(self, group_name: str, tx: float, ty: float) -> None:
+        """Apply uniform traction to a line group, supporting both linear and quadratic edges."""
+        if group_name not in self.physical_groups:
+            available = ", ".join(self.physical_groups.keys())
+            raise KeyError(f"Physical group '{group_name}' not found. Available groups: {available}")
+
+        group = self.physical_groups[group_name]
+        if group["dim"] != 1:
+            # List all groups and their dimensions for debugging
+            dims_info = {name: g["dim"] for name, g in self.physical_groups.items()}
+            raise ValueError(
+                f"Neumann BCs require 1D line groups, but group '{group_name}' has dimension {group['dim']}.\n"
+                f"All groups and dimensions: {dims_info}"
+            )
+
+        traction_edges = []
+        for cell_type, elem_ids in group["cells"].items():
+            # Skip if not a line element
+            if cell_type not in ["line", "line3"]:
+                print(f"Warning: Skipping non-line cell type '{cell_type}' in group '{group_name}'")
                 continue
-            a, b, c = node_coords[indices]
-            if is_point_in_triangle(np.array(coord), a, b, c):
-                matching_elements.append(i + 1)
-        offset = len(triangle_nodes)
-        # check quadrangles
-        for i, nodes in enumerate(quad_nodes):
-            try:
-                indices = [mapping[node] for node in nodes]
-            except KeyError:
+
+            conn = self.mesh.cells_dict[cell_type]
+            for eid in elem_ids:
+                nodes = conn[eid]
+                n_nodes = len(nodes)
+
+                if n_nodes == 2:  # Linear edge
+                    # Equivalent nodal forces for linear element
+                    x1, y1 = self.nodes[nodes[0]]
+                    x2, y2 = self.nodes[nodes[1]]
+                    L = np.hypot(x2 - x1, y2 - y1)
+                    fe = (self.t * L / 2) * np.array([tx, ty, tx, ty])
+                    traction_edges.append((tuple(nodes), fe))
+
+                elif n_nodes == 3:  # Quadratic edge
+                    # Equivalent nodal forces for quadratic element
+                    # Using Simpson's rule for integration
+                    n1, n2, n3 = nodes
+                    x1, y1 = self.nodes[n1]
+                    x2, y2 = self.nodes[n2]
+                    x3, y3 = self.nodes[n3]
+
+                    # Calculate element length
+                    L = np.hypot(x2 - x1, y2 - y1) + np.hypot(x3 - x2, y3 - y2)
+
+                    # Shape functions for quadratic element
+                    # Traction is constant over the element
+                    # Using Simpson's rule: f = (L/6)*[f1 + 4f2 + f3]
+                    f1 = (self.t * L / 6) * np.array([tx, ty])
+                    f2 = (4 * self.t * L / 6) * np.array([tx, ty])
+                    f3 = (self.t * L / 6) * np.array([tx, ty])
+
+                    # Flattened force vector: [f1x, f1y, f2x, f2y, f3x, f3y]
+                    fe = np.array([f1[0], f1[1], f2[0], f2[1], f3[0], f3[1]])
+                    traction_edges.append((tuple(nodes), fe))
+
+                else:
+                    print(f"Warning: Skipping edge with {n_nodes} nodes (only 2 or 3-node edges supported)")
+
+        if not traction_edges:
+            print(f"Warning: No valid edges found in group '{group_name}'")
+            return
+
+        # Apply Neumann BCs
+        for nodes, fe in traction_edges:
+            dofs = []
+            for n in nodes:
+                dofs.extend([2 * n, 2 * n + 1])
+
+            if len(fe) != len(dofs):
+                print(f"Error: Force vector size {len(fe)} doesn't match DOF size {len(dofs)}")
                 continue
-            a, b, c, d = node_coords[indices]
-            if is_point_in_quad(np.array(coord), a, b, c, d):
-                matching_elements.append(offset + i + 1)
-        return matching_elements
 
+            for i, dof in enumerate(dofs):
+                self.F[dof] += fe[i]
 
-@dataclass
-class Material:
-    E: float  # Young's modulus [Pa]
-    nu: float  # Poisson's ratio
-    rho: float  # Density [kg/m^3]
-    plane: str  # stress or strain
+    def solve(self) -> np.ndarray:
+        """Solve the system Ku = F."""
+        K_csr = self.K.tocsr()
+        self.u = spsolve(K_csr, self.F)
+        return self.u
 
+    def export_to_vtk(self, filename: str) -> None:
+        """Export results to VTK file."""
+        # Create 3D points (z=0)
+        pts3 = np.hstack([self.nodes, np.zeros((self.nodes.shape[0], 1))])
 
-class FE_2D:
-    def __init__(self, mesh_file: str, material: Material, order: int = 1):
-        # --- Mesh & domain setup ------------------------------------------
-        self.mesh_name = mesh_file.removesuffix(".msh")
-        mesh = sfepyMesh.from_file(mesh_file)
-        if mesh.coors.shape[1] == 3:
-            mesh.coors[:, 2] = 0.0
-        mesh.write(f"{self.mesh_name}.vtk", io="auto")
-        mesh = sfepyMesh.from_file(f"{self.mesh_name}.vtk")
+        # Collect all elements
+        cells = []
+        if len(self.triangles) > 0:
+            if len(self.triangles[0]) == 3:
+                cells.append(("triangle", self.triangles))
+            else:  # T6
+                cells.append(("triangle6", self.triangles))
+        if len(self.quads) > 0:
+            if len(self.quads[0]) == 4:
+                cells.append(("quad", self.quads))
+            else:  # Q8
+                cells.append(("quad8", self.quads))
 
-        self.domain = FEDomain("domain", mesh)
-
-        # --- Bounding box & automatic gtol --------------------------------
-        bb = self.domain.get_mesh_bounding_box()  # [[xmin,ymin],[xmax,ymax]]
-        (xmin, ymin), (xmax, ymax) = bb
-
-        # build KD‐tree of node coords and get typical spacing h_typ
-        coords = mesh.coors[:, :2]
-        tree = KDTree(coords)
-        dists, _ = tree.query(coords, k=2)
-        h_typ = float(np.median(dists[:, 1]))
-
-        # gtol = fraction of h_typ, with safe fallback
-        self.gtol = max(1e-8, 1e-3 * h_typ)
-        tol = self.gtol
-
-        # --- Selector definitions -----------------------------------------
-        self.selector_list = {
-            "all": lambda: "all",
-            "left": lambda: f"vertices in (x < {xmin + tol:.10e})",
-            "right": lambda: f"vertices in (x > {xmax - tol:.10e})",
-            "bottom": lambda: f"vertices in (y < {ymin + tol:.10e})",
-            "top": lambda: f"vertices in (y > {ymax - tol:.10e})",
-            "boundary": lambda: "vertices of surface",
-            "line_at_x": lambda x: f"vertices in (x > {x - tol:.10e}) * (x < {x + tol:.10e})",
-            "line_at_y": lambda y: f"vertices in (y > {y - tol:.10e}) * (y < {y + tol:.10e})",
-            "box": lambda x0, x1, y0, y1: (
-                f"vertices in (x > {x0 - tol:.10e}) * (x < {x1 + tol:.10e})"
-                f" * (y > {y0 - tol:.10e}) * (y < {y1 + tol:.10e})"
-            ),
+        # Displacement data
+        U_reshaped = self.u.reshape((-1, 2))
+        point_data = {
+            "Displacement": np.hstack([U_reshaped, np.zeros((U_reshaped.shape[0], 1))]),
+            "Ux": U_reshaped[:, 0],
+            "Uy": U_reshaped[:, 1]
         }
 
-        # --- Regions -------------------------------------------------------
-        self.regions = {}
-        # Omega = whole domain cells
-        self.regions["Omega"] = self.domain.create_region("Omega", "all")
-
-        # --- Field & variables --------------------------------------------
-        self.field = Field.from_args(
-            "u_field", np.float64, "vector", self.regions["Omega"], approx_order=order
+        # Create and write mesh
+        mesh = meshio.Mesh(
+            points=pts3,
+            cells=cells,
+            point_data=point_data
         )
-        self.u = FieldVariable("u", "unknown", self.field)
-        self.v = FieldVariable("v", "test", self.field, primary_var_name="u")
+        meshio.write(filename, mesh)
 
-        # --- Material & internal term -------------------------------------
-        self.D = stiffness_from_youngpoisson(
-            2, material.E, material.nu, plane=material.plane
-        )
-        self.mat = sfepyMaterial("mat", D=self.D)
 
-        self.integral = Integral("i", order=2)
-        self.t_int = Term.new(
-            "dw_lin_elastic(mat.D, v, u)",
-            self.integral,
-            self.regions["Omega"],
-            mat=self.mat,
-            v=self.v,
-            u=self.u,
-        )
+def plot_mesh(ax, nodes, triangles, quads, color='k', linewidth=0.5, title=""):
+    """Plot a mesh given nodes and element connectivity"""
+    segments = []
 
-        # --- BC & load containers -----------------------------------------
-        self.ebcs = []
-        self.load_terms = []
-        self.loads = {}
+    # Process triangles
+    for conn in triangles:
+        n_nodes = len(conn)
+        if n_nodes == 3:  # Linear triangle
+            for i in range(3):
+                a, b = conn[i], conn[(i + 1) % 3]
+                segments.append([nodes[a], nodes[b]])
+        elif n_nodes == 6:  # Quadratic triangle
+            # Draw edges: [0-3-1], [1-4-2], [2-5-0]
+            segments.append([nodes[conn[0]], nodes[conn[3]]])
+            segments.append([nodes[conn[3]], nodes[conn[1]]])
+            segments.append([nodes[conn[1]], nodes[conn[4]]])
+            segments.append([nodes[conn[4]], nodes[conn[2]]])
+            segments.append([nodes[conn[2]], nodes[conn[5]]])
+            segments.append([nodes[conn[5]], nodes[conn[0]]])
 
-    def selector(self, selector: Union[str, Callable[..., str]], **kwargs) -> str:
-        """
-        Turn a selector key/callable/raw‐string into a SfePy region expression.
+    # Process quads
+    for conn in quads:
+        n_nodes = len(conn)
+        if n_nodes == 4:  # Linear quad
+            for i in range(4):
+                a, b = conn[i], conn[(i + 1) % 4]
+                segments.append([nodes[a], nodes[b]])
+        elif n_nodes == 8:  # Quadratic quad
+            # Draw edges: [0-4-1], [1-5-2], [2-6-3], [3-7-0]
+            segments.append([nodes[conn[0]], nodes[conn[4]]])
+            segments.append([nodes[conn[4]], nodes[conn[1]]])
+            segments.append([nodes[conn[1]], nodes[conn[5]]])
+            segments.append([nodes[conn[5]], nodes[conn[2]]])
+            segments.append([nodes[conn[2]], nodes[conn[6]]])
+            segments.append([nodes[conn[6]], nodes[conn[3]]])
+            segments.append([nodes[conn[3]], nodes[conn[7]]])
+            segments.append([nodes[conn[7]], nodes[conn[0]]])
 
-        Args:
-            selector:  one of
-                         - a key in self.selector_list (e.g. 'left', 'surface', …)
-                         - a callable returning a region‐string (must accept **kwargs)
-                         - a raw region expression string
-            **kwargs:  parameters passed to the above if needed
+    lc = LineCollection(segments, linewidths=linewidth, colors=color)
+    ax.add_collection(lc)
+    ax.autoscale()
+    ax.set_aspect('equal')
+    ax.set_title(title)
+    return ax
 
-        Returns:
-            A valid SfePy region‐expression string (e.g. 'vertices in (x < 1e-8) *v …').
+if __name__ == "__main__":
+    """
+    TODO :
+        Singular matrix for Q8 elements
+        Stress method in FE
+        Verify results order of amplitude
+        Verify export file in Paraview
+        Define a clear routine to define the creation of the geometry
+        Adapt the reading of pRhino files
+        Create the gui to import the rhino file
+        preview the parameters of the routines
+        being able to change those parameters before launching the routine
+        defining all possibles routine analysises
+        acces K_elem, K_glob, P_r...
+        Way to link / influence of the different stiffnesses sources
+        Detection of contact edges ifrom rhino file
+        Writing of all the theory used in material, and element stiffnesses
+        general coupling with hybridfem, ask question over the general implementation of hybridfem as a whole 
+    """
 
-        Raises:
-            KeyError:   if selector is a str but not in self.selector_list and not looking like an expression.
-            TypeError:  if selector is neither str nor callable.
-            ValueError: if the resulting expression is empty.
-        """
-        # 1) name → callable
-        if callable(selector):
-            expr = selector(**kwargs)
+    # Define square geometry points
+    height = 1
+    length = 10
+    points = [
+        (0.0, 0.0),  # bottom-left
+        (length, 0.0),  # bottom-right
+        (length, height),  # top-right
+        (0.0, height)  # top-left
+    ]
 
-        # 2) string → lookup in self.selector_list
-        elif isinstance(selector, str) and selector in self.selector_list:
-            expr = self.selector_list[selector](**kwargs)
+    # Define boundary groups by line indices:
+    boundary_groups = {
+        "left": [3],  # left edge (line index 3)
+        "right": [1],  # right edge (line index 1)
+        "bottom": [0],  # bottom edge (line index 0)
+        "top": [2]  # top edge (line index 2)
+    }
 
-        # 3) raw expression string (heuristic: must contain at least one space or comparison)
-        elif isinstance(selector, str) and any(
-            tok in selector for tok in (" ", "<", ">", "*", "vertices", "cells")
-        ):
-            expr = selector
+    # Create and generate mesh with quadratic triangles
+    with FE_Mesh(
+            points=points,
+            element_type="quad",  # "tri" or "quad" for quadrilaterals
+            element_size=0.1,
+            order=2,  # 1:Linear elements - 2:Quadratic elements
+            boundary_groups=boundary_groups,
+            name="SquarePlate"
+    ) as mesh:
+        mesh.generate_mesh()
+        mesh.plot(save_path="mesh.png")
 
-        else:
-            raise KeyError(
-                f"Selector '{selector}' not found in predefined selectors "
-                f"and not a valid raw expression."
-            )
+        # Material properties
+        material = FE_Material(E=1000, nu=0.3, rho=1, plane="stress")
 
-        expr = expr.strip()
-        if not expr:
-            raise ValueError("Built selector expression is empty.")
-        return expr
+        # Create FE system
+        fe = FE(mesh, material, thickness=0.1)
 
-    def combine_selectors(
-        self, *selectors: Union[str, Callable[..., str]], op: str = "and", **kwargs
-    ) -> str:
-        """
-        Build a combined SfePy selector expression by AND/OR-ing
-        any number of existing selectors or raw expressions.
+        # Assemble stiffness matrices
+        fe.assemble_stiffness_matrix()
 
-        Args:
-            *selectors:  names in self.selector_list, callables, or raw expr strings
-            op:          'and' (default) or 'or'
-            **kwargs:    keyword args passed to each selector callable
+        # Apply boundary conditions:
+        fe.dirichlet_on_group("left", ux=0, uy=0)  # Fix left edge
+        fe.neumann_on_group("right", tx=10, ty=0)  # Apply traction to right edge
 
-        Returns:
-            A single region‐expression string, e.g.
-            'vertices in (x < 0.1) * (y > 0.5)' or
-            'vertices in (...) *v vertices in (...)'.
+        # Solve system
+        u = fe.solve()
 
-        Raises:
-            KeyError/TypeError/ValueError from build_selector if something’s wrong.
-        """
-        # pick the SfePy operator
-        if op == "and":
-            joiner = " * "
-        elif op == "or":
-            joiner = " *v "
-        else:
-            raise ValueError(f"op must be 'and' or 'or', got {op!r}")
+        # Export results
+        fe.export_to_vtk("results.vtu")
 
-        parts = [self.selector(sel, **kwargs) for sel in selectors]
-        # wrap each part in parentheses if it’s more than a single token
-        parts = [p if p.isidentifier() else f"({p})" for p in parts]
-        expr = joiner.join(parts)
-        return expr
+        # Plot deformed mesh
+        U = u.reshape((-1, 2))
+        scale = 10  # Displacement amplification factor
 
-    def create_region(
-        self,
-        name: str,
-        selector: Union[str, Callable[..., str]],
-        kind: str = "cell",
-        override: bool = False,
-        **kwargs,
-    ):
-        """
-        Create and store a region in the model.
+        # Plotting
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
 
-        Args:
-            name:        the (unique) name of the new region.
-            selector:    either
-                           - a key of self.selector_list (e.g. 'left', 'surface', etc.),
-                           - a raw SfePy region expression string, or
-                           - a callable returning such a string.
-            kind:        one of 'cell', 'facet' or 'vertex'.
-            override:    if False (default), raises if `name` already exists.
-            **kwargs:    any parameters passed to the selector callable.
+        # Undeformed mesh
+        plot_mesh(ax1, fe.nodes, fe.triangles, fe.quads,
+                  color='gray', title="Undeformed Mesh")
 
-        Returns:
-            The new region object.
+        # Deformed mesh (scaled)
+        xy_def = fe.nodes + scale * fe.u.reshape((-1, 2))
+        plot_mesh(ax2, xy_def, fe.triangles, fe.quads,
+                  color='red', title="Deformed Mesh (Scaled)")
 
-        Raises:
-            ValueError: if the region is empty or name already exists.
-            KeyError:   if selector is a string but not in self.selector_list.
-        """
-        # 1) check name
-        if (not override) and (name in self.regions):
-            raise ValueError(
-                f"Region '{name}' already exists; use override=True to replace."
-            )
-
-        # 2) build the SfePy‐style expression string
-        if callable(selector):
-            expr = selector(**kwargs)
-        elif isinstance(selector, str) and (selector in self.selector_list):
-            expr = self.selector_list[selector](**kwargs)
-        elif isinstance(selector, str):
-            expr = selector
-        else:
-            raise TypeError(f"Selector must be a str or callable, got {type(selector)}")
-
-        # 3) create region on the domain
-        region = self.domain.create_region(name, expr, kind=kind)
-
-        # 4) sanity check: must have at least one entity
-        count = getattr(
-            region,
-            {"cell": "n_cells", "facet": "n_facets", "vertex": "n_vertices"}[kind],
-        )
-        if count == 0:
-            # clean up
-            del region
-            raise ValueError(
-                f"Region '{name}' with expression '{expr}' is empty (kind={kind})."
-            )
-
-        # 5) store and return
-        self.regions[name] = region
-        return region
-
-    def add_dirichlet(self, name: str, selector: str, comp_dict: dict, **kwargs):
-        """
-        Fix a displacement component (or all) on a given boundary.
-        """
-        reg = self.domain.create_region(
-            name, self.selector_list[selector](**kwargs), kind="facet"
-        )
-        self.regions[name] = reg
-        self.ebcs.append(EssentialBC(name, reg, comp_dict))
-
-    def add_functional_dirichlet(
-        self, name: str, selector: str, funcs: List[callable] = None, **kwargs
-    ) -> None:
-        expr = self.selector_list[selector](**kwargs)
-        reg = self.domain.create_region(name, expr, kind="facet")
-        self.regions[name] = reg
-        if funcs is None:
-            self.ebcs.append(EssentialBC(name, reg, {"u.all": 0.0}))
-        elif len(funcs) == 2:
-            self.ebcs.append(EssentialBC(name + "x", reg, {"u.0": funcs[0]}))
-            self.ebcs.append(EssentialBC(name + "y", reg, {"u.1": funcs[1]}))
-        else:
-            self.ebcs.append(EssentialBC(name, reg, {"u.all": funcs[0]}))
-
-    def add_surface_load(self, selector: str, px: float = 0, py: float = 0, **kwargs):
-        if px == 0.0 and py == 0.0:
-            return
-        idx = len(self.load_terms)
-        load_name = f"load_{idx}"
-
-        load_val = np.array([[px], [py]], dtype=float)  # shape (2,1)
-        surf_load = sfepyMaterial(load_name, val=load_val)
-
-        expr = self.selector_list[selector](**kwargs)
-        reg = self.domain.create_region(f"{load_name}_reg", expr, kind="facet")
-
-        term = Term.new(
-            f"dw_surface_ltr({load_name}.val, v)",
-            self.integral,
-            region=reg,
-            **{load_name: surf_load},
-            v=self.v,
-        )
-
-        self.regions[f"{load_name}_reg"] = reg
-        self.load_terms.append(term)
-        self.loads[load_name] = surf_load
-
-    def solve(self, vtk_out: str = None):
-        """assemble, solve and store the converged state"""
-        if vtk_out is None:
-            vtk_out = "{}_solved_lin.vtk".format(self.mesh_name)
-        elif not vtk_out.endswith(".vtk"):
-            vtk_out += ".vtk"
-
-        term_list = [self.t_int] + [-lt for lt in self.load_terms]
-
-        rhs = term_list[0] if len(term_list) == 1 else Terms(term_list)
-        eq = Equation("balance", rhs)
-
-        pb = Problem("elasticity_2D", equations=Equations([eq]), domain=self.domain)
-        pb.set_bcs(ebcs=Conditions(self.ebcs))
-
-        ls = ScipyDirect({})
-        nls = Newton({"i_max": 1}, lin_solver=ls)
-        pb.set_solver(nls)
-
-        self.state = pb.solve()  # keep for later use
-        self.u = pb.get_variables()["u"]  # update variable handle
-        pb.save_state(vtk_out, self.state)
-
-        return self.state
-
-    def probe(self, coors, quantity="u", return_status=False):
-        """
-        Interpolate solution‑related data at coordinates *coors*.
-        quantity ∈ {'u','ux','uy','strain','stress','sxx','syy','sxy'}.
-        """
-        if not hasattr(self, "state"):
-            raise RuntimeError("solve() first!")
-
-        pts = np.atleast_2d(coors)
-        u_val, _, inside = self.u.evaluate_at(pts, ret_cells=True, ret_status=True)
-
-        # strains from displacement gradient
-        if (
-            quantity.startswith("strain")
-            or quantity.startswith("stress")
-            or quantity[-2:] in ("xx", "yy", "xy")
-        ):
-            grad = self.u.evaluate_at(pts, mode="grad")
-            eps = 0.5 * (grad + np.transpose(grad, (0, 2, 1)))
-            strain = np.stack(
-                [eps[:, 0, 0], eps[:, 1, 1], 2 * eps[:, 0, 1]], axis=1
-            )  # [ε_xx, ε_yy, γ_xy]
-
-            if quantity == "strain":
-                out = strain
-            else:
-                stress = strain @ self.D.T  # Voigt
-                voigt = dict(
-                    sxx=stress[:, 0],
-                    syy=stress[:, 1],
-                    sxy=stress[:, 2],
-                    exx=strain[:, 0],
-                    eyy=strain[:, 1],
-                    exy=strain[:, 2],
-                )
-                out = voigt[quantity]
-        else:  # displacement components
-            comp = dict(u=u_val, ux=u_val[:, 0], uy=u_val[:, 1])
-            out = comp[quantity]
-        return (out, inside) if return_status else out
+        plt.tight_layout()
+        plt.savefig("deformation.png")
+        plt.show()
