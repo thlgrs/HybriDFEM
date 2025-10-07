@@ -17,14 +17,13 @@ def custom_warning_format(message, category, filename, lineno, file=None, line=N
     file_short_name = filename.replace(os.path.dirname(filename), "")
     return f"Warning! In file {file_short_name}, line {lineno}: {message}\n"
 
-
 warnings.formatwarning = custom_warning_format
-
 
 class Block_2D:
 
-    def __init__(self, vertices, rho, b=1, material=None, ref_point=None):
-
+    def __init__(self, vertices, rho, b=1, material=None, ref_point=None): 
+        
+        
         # Initializing attributes of block
         self.connect = None
         self.dofs = np.zeros(3)
@@ -38,10 +37,10 @@ class Block_2D:
         self.rho = rho
 
         self.b = b
-
+        self.cfs = []
         # Check if we use material, contact or surface law
-        if not material: warn("Warning: Block was defined without material model")
-
+        # if not material: warn("Warning: Block was defined without material model")
+        
         self.material = material
 
         # Computing center of gravity, area, mass and rotational inertia w.r.t ref point
@@ -52,17 +51,17 @@ class Block_2D:
             self.ref_point = self.center.copy()
         else:
             self.ref_point = ref_point.copy()
-
+        
         self.get_rot_inertia()
 
         if not self.is_valid_polygon(): warn("Careful, the block is not a valid polygon", UserWarning)
         self.get_min_circle()
 
-    def make_connect(self, index):
-
+    def make_connect(self, index): 
+        
         self.connect = index
         self.dofs = np.arange(3) + 3 * index * np.ones(3, dtype=int)
-
+        
     def get_area(self):
 
         for i in range(self.nb_vertices - 1):
@@ -77,16 +76,16 @@ class Block_2D:
 
         for i in range(self.nb_vertices - 1):
             self.center[0] += (self.v[i, 0] + self.v[i + 1, 0]) * (
-                    self.v[i, 0] * self.v[i + 1, 1] - self.v[i + 1, 0] * self.v[i, 1])
+                        self.v[i, 0] * self.v[i + 1, 1] - self.v[i + 1, 0] * self.v[i, 1])
             self.center[1] += (self.v[i, 1] + self.v[i + 1, 1]) * (
-                    self.v[i, 0] * self.v[i + 1, 1] - self.v[i + 1, 0] * self.v[i, 1])
+                        self.v[i, 0] * self.v[i + 1, 1] - self.v[i + 1, 0] * self.v[i, 1])
 
         self.center[0] += (self.v[-1, 0] + self.v[0, 0]) * (self.v[-1, 0] * self.v[0, 1] - self.v[0, 0] * self.v[-1, 1])
         self.center[1] += (self.v[-1, 1] + self.v[0, 1]) * (self.v[-1, 0] * self.v[0, 1] - self.v[0, 0] * self.v[-1, 1])
 
         self.center /= (6 * self.A)
 
-    def get_rot_inertia(self):
+    def get_rot_inertia(self): 
         v = self.v - np.tile(self.center, (self.nb_vertices, 1))
         # Rotational inertia around centroid 
         for i in range(self.nb_vertices - 1):
@@ -106,14 +105,14 @@ class Block_2D:
 
         self.I += self.m * (d[0] ** 2 + d[1] ** 2)
 
-    def is_valid_polygon(self):
+    def is_valid_polygon(self): 
         # Check if the block that is created corresponds to a real shape. 
-        def on_segment(a, b, c):
+        def on_segment(a, b, c): 
             # Given colinear points a,b,c, check if c lies on segment ab
             return c[0] <= max(a[0], b[0]) and c[0] >= min(a[0], b[0]) and \
                 c[1] <= max(a[1], b[1]) and c[1] >= min(a[1], b[1])
 
-        def orientation(a, b, c):
+        def orientation(a, b, c): 
             # Check if points a b c are colinear :
             value = (b[1] - a[1]) * (c[0] - b[0]) - (b[0] - a[0]) * (c[1] - b[1])
 
@@ -124,7 +123,7 @@ class Block_2D:
             else:  # Counterclockwise
                 return 2
 
-        def intersect(a1, b1, a2, b2):
+        def intersect(a1, b1, a2, b2): 
             # Check intersection between segment a1b1 and segment a2b2: 
             o1 = orientation(a1, b1, a2)
             o2 = orientation(a1, b1, b2)
@@ -161,7 +160,7 @@ class Block_2D:
 
         def are_inside(circle, P):
 
-            for p in P:
+            for p in P: 
                 if not is_inside(circle, p): return False
 
             return True
@@ -187,7 +186,7 @@ class Block_2D:
             I = intermediate_circle_center(np.array([b[0] - a[0], b[1] - a[1]]), np.array([c[0] - a[0], c[1] - a[1]]))
 
             return make_circle(I + a, distance(I + a, a))
-
+            
         def min_circle_3points(P):
 
             assert len(P) <= 3
@@ -206,15 +205,15 @@ class Block_2D:
 
             if (n == 0 or len(R) == 3): return min_circle_3points(R)
 
-            trial_circle = welzl_helper(P[1:], R.copy(), n - 1)
-
+            trial_circle = welzl_helper(P[1:], R.copy(), n -1)
+            
             if is_inside(trial_circle, P[0]): return trial_circle
 
             R.append(P[0])
             # print(R)
             return welzl_helper(P[1:], R.copy(), n - 1)
 
-        def welzl(P):
+        def welzl(P): 
             return welzl_helper(P, [], len(P))
 
         # circle = welzl(self.v)
@@ -228,7 +227,7 @@ class Block_2D:
             self.mass = np.array([[self.m, 0, 0],
                                   [0, self.m, 0],
                                   [0, 0, 0]])
-        else:
+        else: 
             self.mass = np.diag(np.array([self.m, self.m, self.I]))
 
         return self.mass
@@ -247,28 +246,30 @@ class Block_2D:
             triplet = {}
             triplet['ABC'] = equation
             triplet['Vertices'] = np.array([a, b])
-
+            
             return triplet
 
         list_triplets = []
 
         for i in range(self.nb_vertices - 1):
             list_triplets.append(make_triplet(self.v[i], self.v[i + 1]))
-
+            
         list_triplets.append(make_triplet(self.v[-1], self.v[0]))
 
         return list_triplets
 
-    def plot_block(self, scale=0):
+    def plot_block(self, scale=0, lighter=False):
 
-        if scale > 1 and abs(self.disps[2]) < np.pi / 2:
+        if scale > 1:  # and abs(self.disps[2]) < np.pi/2:
             angle_scaled = np.arctan(scale * np.tan(self.disps[2]))  # Scaling the rotation angle
+        elif scale == 0:
+            angle_scaled = 0
         else:
-            angle_scaled = self.disps[2]
-
+            angle_scaled = scale * self.disps[2]
+        
         T = np.array([[np.cos(angle_scaled), -np.sin(angle_scaled)],
-                      [np.sin(angle_scaled), np.cos(angle_scaled)]])  # Rotation matrix
-
+                      [np.sin(angle_scaled), np.cos(angle_scaled)]])  #Rotation matrix
+        
         # Initializing new positions of vertices
         x_vertices = []
         y_vertices = []
@@ -279,7 +280,7 @@ class Block_2D:
 
             x_vertices.append(self.ref_point[0] + ref_point_to_vertex[0] + scale * self.disps[0] + rotation[0])
             y_vertices.append(self.ref_point[1] + ref_point_to_vertex[1] + scale * self.disps[1] + rotation[1])
-
+            
         ref_point_to_center = self.center - self.ref_point
         rotation = T @ ref_point_to_center - ref_point_to_center
 
@@ -288,14 +289,31 @@ class Block_2D:
 
         x_ref = self.ref_point[0] + scale * self.disps[0]
         y_ref = self.ref_point[1] + scale * self.disps[1]
-
+        
         # Closing the shape
         x_vertices.append(x_vertices[0])
         y_vertices.append(y_vertices[0])
 
-        plt.plot(x_vertices, y_vertices, marker='o', markersize=0., linestyle='-', color='black',
-                 linewidth=.25)  # Plotting edges of polygon
-        # plt.fill(x_vertices, y_vertices, color='lightgray') # Filling polygon
+        if lighter:
+            color = 'gray'
+            linewidth = .15
+        else:
+            color = 'black'
+            linewidth = .3
+        # plt.plot(x_vertices, y_vertices, marker='o', markersize=0., linestyle='-', color=color, linewidth=linewidth) #Plotting edges of polygon
+        try:
+            if self.material.tag == 'STC':
+                plt.fill(x_vertices, y_vertices, color='#fbb040', linewidth=0)  # Filling polygon
+                # plt.plot(x_vertices, y_vertices, marker='o', markersize=0., linestyle='-', color='black', linewidth=.1)
+            elif self.material.tag == 'CTC':
+                plt.fill(x_vertices, y_vertices, color='silver', linewidth=0)
+                # plt.plot(x_vertices, y_vertices, marker='o', markersize=0., linestyle='-', color='black', linewidth=.1)
+            else:
+                plt.plot(x_vertices, y_vertices, marker='o', markersize=0., linestyle='-', color=color,
+                         linewidth=linewidth)
+        except:
+            plt.plot(x_vertices, y_vertices, marker='o', markersize=0., linestyle='-', color=color, linewidth=linewidth)
+    
         # plt.plot(x_center, y_center, marker='o', color='red', markersize=3) #Plotting center of gravity of polygon
         # plt.plot(x_ref, y_ref, marker='x', color='black', markersize=2) #Plotting reference point of polygon
 
@@ -304,7 +322,7 @@ class Block_2D:
             x_circle = np.ones(200) * self.circle_center[0] + self.circle_radius * np.cos(theta)
             y_circle = np.ones(200) * self.circle_center[1] + self.circle_radius * np.sin(theta)
 
-            # plt.plot(x_circle, y_circle, color='blue', linestyle='dashed', linewidth=.2)
-
+            #plt.plot(x_circle, y_circle, color='blue', linestyle='dashed', linewidth=.2)
+            
         plt.axis('equal')
         plt.axis('off')

@@ -5,17 +5,15 @@ Created on Tue Aug  6 16:52:50 2024
 @author: ibouckaert
 """
 
-from copy import deepcopy
-
-import matplotlib.pyplot as plt
 import numpy as np
-from numpy import ndarray
+from copy import deepcopy
+import matplotlib.pyplot as plt  # For creating plots
 
 
 class Timoshenko_FE_2D:
 
-    def __init__(self, Node1:ndarray[2], Node2:ndarray[2], E:float, nu:float, b:float, h:float, lin_geom=True, rho=0.):
-
+    def __init__(self, Node1, Node2, E, nu, b, h, lin_geom=True, rho=0.):
+        
         self.N1 = Node1
         self.N2 = Node2
 
@@ -31,7 +29,7 @@ class Timoshenko_FE_2D:
         self.E = E
         self.nu = nu
         self.chi = (6 + 5 * self.nu) / (5 * (1 + self.nu))
-
+        
         self.lin_geom = lin_geom
 
         self.G = E / (2 * (1 + nu))
@@ -49,35 +47,37 @@ class Timoshenko_FE_2D:
         s = np.sin(self.alpha)
 
         self.dofs = np.zeros(6, dtype=int)
-
+        
         self.r_C = np.array([[c, s, 0, 0, 0, 0],
                              [-s, c, 0, 0, 0, 0],
                              [0, 0, 1, 0, 0, 0],
                              [0, 0, 0, c, s, 0],
                              [0, 0, 0, -s, c, 0],
                              [0, 0, 0, 0, 0, 1]])
-
+        
         self.rho = rho
+
+        # self.get_mass()
 
     def get_mass(self, no_inertia=False):
 
         m_node = self.b * self.h * self.L / 2 * self.rho
-        if no_inertia:
+        if no_inertia: 
             I_node = 0
         else:
             I_node = (((self.L / 2) ** 2 + self.h ** 2) * (1 / 12) + (self.L / 4) ** 2)
-
+        
         self.mass = np.diag(m_node * np.array([1, 1, I_node, 1, 1, I_node]))
 
         return self.mass
 
-    def make_connect(self, connect, node_number):
-
+    def make_connect(self, connect, node_number): 
+        
         self.connect[node_number] = connect
 
-        if node_number == 0:
+        if node_number == 0: 
             self.dofs[:3] = np.array([0, 1, 2], dtype=int) + 3 * connect * np.ones(3, dtype=int)
-        elif node_number == 1:
+        elif node_number == 1: 
             self.dofs[3:] = np.array([0, 1, 2], dtype=int) + 3 * connect * np.ones(3, dtype=int)
 
     def get_k_glob(self):
@@ -88,8 +88,16 @@ class Timoshenko_FE_2D:
 
         return self.k_glob
 
-    def get_p_glob(self, q_glob):
+    def get_k_glob0(self):
 
+        self.get_k_loc0()
+
+        self.k_glob0 = np.transpose(self.r_C) @ self.k_loc0 @ self.r_C
+
+        return self.k_glob0
+
+    def get_p_glob(self, q_glob): 
+        
         self.q_glob = q_glob
 
         self.p_glob = np.zeros(6)
@@ -102,14 +110,15 @@ class Timoshenko_FE_2D:
 
         return self.p_glob
 
-    def get_p_loc(self):
-
+    def get_p_loc(self): 
+        
         self.get_p_bsc()
 
         self.p_loc = np.transpose(self.gamma_C) @ self.p_bsc
 
-    def get_p_bsc(self):
-
+    def get_p_bsc(self): 
+        
+        
         if self.lin_geom:
             self.gamma_C = np.array([[-1, 0, 0, 1, 0, 0],
                                      [0, 1 / self.L, 1, 0, -1 / self.L, 0],
@@ -119,7 +128,7 @@ class Timoshenko_FE_2D:
         else:
             self.l = np.sqrt((self.L + self.q_loc[3] - self.q_loc[0]) ** 2 + (self.q_loc[4] - self.q_loc[1]) ** 2)
             self.beta = np.arctan2((self.q_loc[4] - self.q_loc[1]), (self.L + self.q_loc[3] - self.q_loc[0]))
-
+            
             c = np.cos(self.beta)
             s = np.sin(self.beta)
 
@@ -139,8 +148,8 @@ class Timoshenko_FE_2D:
 
         self.p_bsc = self.k_bsc @ self.q_bsc
 
-    def get_k_bsc(self):
-
+    def get_k_bsc(self): 
+        
         l = self.L
         ps = self.psi
 
@@ -173,32 +182,45 @@ class Timoshenko_FE_2D:
                                         [2 * cb * sb, sb ** 2 - cb ** 2, 0, -2 * cb * sb, cb ** 2 - sb ** 2, 0],
                                         [sb ** 2 - cb ** 2, -2 * cb * sb, 0, cb ** 2 - sb ** 2, 2 * cb * sb, 0],
                                         [0, 0, 0, 0, 0, 0]])
-
+                    
         return G_1, G_23
 
     def get_k_loc(self):
 
         self.get_k_bsc()
 
-        if self.lin_geom:
+        if self.lin_geom: 
             self.gamma_C = np.array([[-1, 0, 0, 1, 0, 0],
                                      [0, 1 / self.L, 1, 0, -1 / self.L, 0],
                                      [0, 1 / self.L, 0, 0, -1 / self.L, 1]])
-
+        
         self.k_loc_mat = np.transpose(self.gamma_C) @ self.k_bsc @ self.gamma_C
 
-        if not self.lin_geom:
+        if not self.lin_geom: 
+            
             self.G1, self.G23 = self.G1_G23(self.l, self.beta)
 
             self.k_loc_geom = self.G1 * self.p_bsc[0] + self.G23 * (self.p_bsc[1] + self.p_bsc[2])
 
-        if self.lin_geom:
+        if self.lin_geom: 
             self.k_loc = deepcopy(self.k_loc_mat)
-        else:
+        else: 
             self.k_loc = self.k_loc_mat + self.k_loc_geom
 
-    def PlotDefShapeElem(self, defs, scale=1):
+    def get_k_loc0(self):
 
+        self.get_k_bsc()
+
+        self.gamma_C = np.array([[-1, 0, 0, 1, 0, 0],
+                                 [0, 1 / self.L, 1, 0, -1 / self.L, 0],
+                                 [0, 1 / self.L, 0, 0, -1 / self.L, 1]])
+
+        self.k_loc_mat0 = np.transpose(self.gamma_C) @ self.k_bsc @ self.gamma_C
+
+        self.k_loc0 = deepcopy(self.k_loc_mat0)
+
+    def PlotDefShapeElem(self, defs, scale=1): 
+    
         disc = 100
 
         defs_loc = self.r_C @ defs
@@ -210,10 +232,10 @@ class Timoshenko_FE_2D:
         phi2 = scale * defs_loc[2] * (x_loc - 2 * x_loc ** 2 / self.L + x_loc ** 3 / self.L ** 2)
         phi3 = scale * defs_loc[4] * (3 * x_loc ** 2 / self.L ** 2 - 2 * x_loc ** 3 / self.L ** 3)
         phi4 = scale * defs_loc[5] * (-x_loc ** 2 / self.L + x_loc ** 3 / self.L ** 2)
-
+  
         y_loc += phi1 + phi2 + phi3 + phi4
         x_loc += np.linspace(scale * defs_loc[0], 0, disc) + np.linspace(0, scale * defs_loc[3], disc)
-
+        
         # Rotation to align with element in global axes
         x_glob = np.zeros(disc)
         y_glob = np.zeros(disc)
@@ -224,7 +246,7 @@ class Timoshenko_FE_2D:
 
         for i in range(disc):
             x_glob[i], y_glob[i] = r @ np.array([x_loc[i], y_loc[i]])
-
+    
         # Positioning at correct position 
 
         x_undef = np.linspace(self.N1[0], self.N2[0], disc)
@@ -233,12 +255,12 @@ class Timoshenko_FE_2D:
         x_def = x_glob + self.N1[0]
         y_def = y_glob + self.N1[1]
 
-        plt.plot(x_def, y_def, linewidth=1, color='black')
+        plt.plot(x_def, y_def, linewidth=1.5, color='black')
         plt.plot(x_def[0], y_def[0], color='black', marker='o', markersize=3)
         plt.plot(x_def[-1], y_def[-1], color='black', marker='o', markersize=3)
 
-    def PlotUndefShapeElem(self):
-
+    def PlotUndefShapeElem(self): 
+    
         disc = 10
 
         x_loc = np.linspace(0, self.L, disc)
@@ -254,7 +276,7 @@ class Timoshenko_FE_2D:
 
         for i in range(disc):
             x_glob[i], y_glob[i] = r @ np.array([x_loc[i], y_loc[i]])
-
+    
         # Positioning at correct position 
 
         x_undef = np.linspace(self.N1[0], self.N2[0], disc)
