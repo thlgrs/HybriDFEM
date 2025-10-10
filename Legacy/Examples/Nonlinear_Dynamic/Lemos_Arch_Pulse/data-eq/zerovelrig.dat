@@ -1,0 +1,16 @@
+; zero all 6 rigid block velocities
+fish define zerovel
+  ib = block.head
+  loop while ib#null
+    block.vel.x(ib) = 0.0
+    block.vel.y(ib) = 0.0
+    block.vel.z(ib) = 0.0
+    block.rvel.x(ib) = 0.0
+    block.rvel.y(ib) = 0.0
+    block.rvel.z(ib) = 0.0
+    ib = block.next(ib)
+  endloop
+end
+@zerovel
+;
+;

@@ -1,0 +1,228 @@
+; ===========================================================
+; Vault
+; (based on: Circular arch / Pointed arch)
+; J.V. Lemos
+; LNEC
+; ===========================================================
+; -----------------------------------------------------------
+; start new model
+model new
+
+; model name
+[xname='acn103']
+
+; create log file
+prog log-f [xname+'.log']
+prog log on
+[io.out(' xname = '+xname)]
+
+; select arch / vault
+[ivault=1]
+[ivaultc=1]
+
+; select arch type: circular or pointed
+; circular arch: set iarchac=1
+; pointed arch: set iarchag=1
+[iarch=0]
+[iarchac=0]
+[iarchag=0]
+
+; set earthquake scaling factor
+[eqmag=1.0]
+[io.out(' earthquake scaling factor = '+string(eqmag))]
+
+; joint properties
+[jkn=10e9]
+[jks=10e9]
+[jfric=35.0]
+
+; initial configuration settings
+model config dynamic
+model large-strain on
+model random 10000
+model title [xname]
+
+; -----------------------------------------------------------
+; --- generate arch, circular, pointed ---
+fish define gen_arch_acag
+  if iarch = 1
+    if iarchac = 1
+      command
+        prog call 'ac-geom.dat'
+      endcommand
+    endif
+    if iarchag = 1
+      command
+        prog call 'ag-geom.dat'
+      endcommand
+    endif
+  endif
+end
+[gen_arch_acag]
+
+; -----------------------------------------------------------
+; --- generate vault ---
+fish define gen_vault00
+
+  if ivault=0
+    exit
+  endif
+
+  ; --- initialize variables ---
+      command
+        prog call 'vac-generate.dat'
+     endcommand
+
+end
+[gen_vault00]
+
+fish define gen_vault01
+
+  if ivault=0
+    exit
+  endif
+
+
+  ; no. voussoirs
+  nbseg = 17         ; <<< define
+  ; radii
+  r1 = 3.75          ; <<<
+  r2 = 4.25          ; <<<
+  ; centre
+  x0 = 0.0           ; <<<
+  y0 = -0.50         ; <<<
+  z0 = 0.0           ; <<<
+  ; block width (out of arch plane)
+  ; angle at abutment (degrees)
+  ; angini = (2.0/17.0) * 180.0
+  angini = 0.0
+  ; bwid = 0.3
+  bwid = 1.0
+  ; idirxy = 1 : vault axis in x-dir.
+  ; idirxy = 2 : vault axis in y-dir.
+  idirxy = 2
+  ; no half-blocks
+  nblen = 1
+  ; group
+  vagroup = 'barch'
+  ; joining block pattern
+  ; 1: join (oop) blocks i=1,3,5,...
+  ; 2: join (oop) blocks i=2,4,6,...
+  ijoin = 0
+  ; elastic joint pattern
+  ielast = 0
+  elgroup = 'jelast'
+  ; base blocks
+  ibbase = 0
+  zbbase = 0.20
+  basegroup = 'bbase'
+  ; generate blocks
+  vacirc
+
+end
+[gen_vault01]
+
+block hide off
+
+
+; -----------------------------------------------------------
+; --- creeate support blocks ---
+; base
+block create brick -5 -3.65 -0.6 0.6 -0.5 0  group 'bbase'
+block create brick 3.65 5 -0.6 0.6 -0.5 0    group 'bbase'
+
+; lower base
+block create brick -7 7  -2 2 -0.6 -0.5  group 'bbase'
+
+; -----------------------------------------------------------
+; rigid blocks: sub-divide faces into triangles; create sub-contacts
+; deformable blocks: generate mesh inside blocks; create sub-contacts
+; -----------------------------------------------------------
+
+; rigid blocks: face triangulation options
+; default: 4 contact points for rectangular face; 2 triangular sub-faces
+
+; option radial: 5 contact points on rectangular face; 4 triangular sub-faces
+; block face triangulate radial
+
+; option radial-8: 3x3 contact points on rectangular face; 8 triangular sub-faces
+block face triangulate radial-8
+
+; create sub-contacts
+block contact generate-subcontacts
+
+; -----------------------------------------------------------
+; properties
+; -----------------------------------------------------------
+; block material density
+block property density 2700
+
+; assign joint model
+block contact jmodel assign mohr
+; define contact properties
+block contact property stiffness-normal [jkn] stiffness-shear [jks] friction  [jfric]
+; for large displacement analysis: define default properties for new contacts
+block contact material-table default prop stiffness-normal [jkn] stiffness-shear [jks] friction  [jfric]
+
+; -----------------------------------------------------------
+; select static or dynamic analysis
+; -----------------------------------------------------------
+; --- select static analysis ---
+model dynamic active off
+block mech damp local
+
+; -----------------------------------------------------------
+; boundary conditions and loads
+; -----------------------------------------------------------
+; fix base block
+block fix range group 'bbase'
+
+; fix out-of-plane
+block fix v-y range group 'barch'
+block fix r-x range group 'barch'
+block fix r-z range group 'barch'
+
+; --- dummy insitu stress (very small compression) ---
+block insitu stress -1e-6 -1e-6 -1e-6 0 0 0
+
+; --- gravity load ---
+model gravity 0.0 0.0 -10.0
+
+; -----------------------------------------------------------
+; --- define histories ---
+; -----------------------------------------------------------
+model history mechanical unbalanced-maximum
+; model history mechanical ratio
+model history mechanical ratio-maximum
+model history mechanical ratio-average
+block history displacement-x position 0 0 5
+block history displacement-y position 0 0 5
+block history displacement-z position 0 0 5
+; sampling interval
+history interval 50
+
+; -----------------------------------------------------------
+;
+; --- gravity loading step ---
+;
+; -----------------------------------------------------------
+; run to static equlibrium
+
+; run fixed number of steps
+; model cycle 5000
+
+; run until convergence criterion is met
+model solve
+
+; reduce convergence unbalanced force ratio (default is 1.0e-5)
+model solve mechanical ratio-average 1.0e-6
+
+; save file
+model save [xname+'g.sav']
+
+; print summary of model data
+block list max
+
+return
+
+

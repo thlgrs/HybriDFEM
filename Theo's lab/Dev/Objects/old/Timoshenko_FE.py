@@ -5,9 +5,11 @@ Created on Tue Aug  6 16:52:50 2024
 @author: ibouckaert
 """
 
-import numpy as np
 from copy import deepcopy
+
 import matplotlib.pyplot as plt  # For creating plots
+import numpy as np
+
 from .FE import FE
 
 

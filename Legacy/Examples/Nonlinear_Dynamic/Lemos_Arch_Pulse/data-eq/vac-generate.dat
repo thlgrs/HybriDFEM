@@ -1,0 +1,277 @@
+; -----------------------------------------------
+; --- vac-generate.dat ---
+; generate circular vault
+; 3dec version 7.0
+; -----------------------------------------------
+fish define vacirc0
+
+  array bvaid(100,100)
+
+  ; global vacirc0
+  ; global vacirc
+
+  io.out(' in: vacirc0 ')
+
+; --- initialize variables ---
+  ; no. voussoirs
+  nbseg = 17         ; <<< define
+  ; radii
+  r1 = 3.75          ; <<<
+  r2 = 4.25          ; <<<
+  ; centre
+  x0 = 0.0           ; <<<
+  y0 = 0.0           ; <<<
+  z0 = 0.0           ; <<<
+  ; angle at abutment (degrees)
+  angini = 0.0
+  ; block half-width (out of arch plane)
+  bwid = 1.0         ; <<<
+  ; idirxy = 1 : vault axis in x-dir.
+  ; idirxy = 2 : vault axis in y-dir.
+  idirxy = 2         ; <<<
+  ; no. half-blocks in length
+  nblen = 1          ; <<<
+  ; block group
+  vagroup = 'barch'
+  ; joining block pattern
+  ; 1: join (oop) blocks i=1,3,5,...
+  ; 2: join (oop) blocks i=2,4,6,...
+  ijoin = 1
+  ; elastic joint pattern
+  ; ielast = 1 : set contact group instead of joining
+  ielast = 1
+  elgroup = 'jelast'
+  ; base blocks: ibbase=0 or 1
+  ibbase = 1
+  zbbase = 0.0
+  ; exterior horiz. coord. at base (output)
+  rhbbase = 0.0
+  rzbbase = 0.0
+  basegroup = 'bbase'
+
+
+end
+[vacirc0]
+
+
+
+fish define vacirc
+
+ io.out(' in: vacirc ')
+ io.out(' nbseg '+string(nbseg)+' nblen '+string(nblen))
+
+  if nbseg > 100
+   io.out(' *** error: nbseg '+string(nbseg)+' > 100 ')
+   exit
+  endif
+  if nblen > 100
+   io.out(' *** error: nblen '+string(nblen)+' > 100 ')
+   exit
+  endif
+
+; -----------------------------------------------
+; --- generate vault ---
+  loop j (1, nblen)
+
+    ; vault axis in y-dir.
+    if idirxy = 2
+
+      xj0 = x0
+      zj0 = z0
+      ya = y0 + (j-1) * bwid
+      yb = y0 + (j) * bwid
+
+; --- generate arch blocks ---
+      dalpha = (math.pi - 2.0*angini*math.degrad) / nbseg
+      alpha0 = (math.pi - angini*math.degrad)
+      loop i (1, nbseg)
+        alpha = alpha0 - ((i-1) * dalpha)
+        x1 = xj0 + r1 * math.cos (alpha)
+        z1 = zj0 + r1 * math.sin (alpha)
+        x2 = xj0 + r2 * math.cos (alpha)
+        z2 = zj0 + r2 * math.sin (alpha)
+        alphan = alpha0 - ((i) * dalpha)
+        x1n = xj0 + r1 * math.cos (alphan)
+        z1n = zj0 + r1 * math.sin (alphan)
+        x2n = xj0 + r2 * math.cos (alphan)
+        z2n = zj0 + r2 * math.sin (alphan)
+        command
+          block create prism face-1 @x1 @ya @z1 @x2 @ya @z2 @x2 @yb @z2 @x1 @yb @z1 ...
+                             face-2 @x1n @ya @z1n @x2n @ya @z2n @x2n @yb @z2n @x1n @yb @z1n ...
+                             group [vagroup]
+        endcommand
+        bvaid(i,j) = block.head
+        io.out(' i '+string(i)+' j '+string(j)+' bvaid '+string(bvaid(i,j)))
+        ibnew = block.head
+        block.extra(ibnew,1) = i
+        block.extra(ibnew,2) = j
+        if i = 1
+          rhbbase = math.abs(x2)
+          rzbbase = math.abs(z2)
+        endif
+      endloop
+
+      ; --- base blocks ---
+      if ibbase = 1
+        alpha = alpha0
+        x1 = xj0 + r1 * math.cos (alpha)
+        z1 = zj0 + r1 * math.sin (alpha)
+        x2 = xj0 + r2 * math.cos (alpha)
+        z2 = zj0 + r2 * math.sin (alpha)
+        command
+          block create prism face-1 @x1 @ya @zbbase @x2 @ya @zbbase @x2 @yb @zbbase @x1 @yb @zbbase ...
+                             face-2 @x1 @ya @z1 @x2 @ya @z2 @x2 @yb @z2 @x1 @yb @z1 ...
+                             group [basegroup]
+        endcommand
+        alphan = alpha0 - (nbseg * dalpha)
+        x1n = xj0 + r1 * math.cos (alphan)
+        z1n = zj0 + r1 * math.sin (alphan)
+        x2n = xj0 + r2 * math.cos (alphan)
+        z2n = zj0 + r2 * math.sin (alphan)
+        command
+          block create prism face-1 @x1n @ya @z1n @x2n @ya @z2n @x2n @yb @z2n @x1n @yb @z1n ...
+                             face-2 @x1n @ya @zbbase @x2n @ya @zbbase @x2n @yb @zbbase @x1n @yb @zbbase ...
+                             group [basegroup]
+        endcommand
+      endif
+      ; ------------------
+
+    endif ; idirxy=2
+
+    ; vault axis in x-dir.
+    if idirxy = 1
+
+      yj0 = y0
+      zj0 = z0
+      xa = x0 + (j-1) * bwid
+      xb = x0 + (j) * bwid
+
+; --- generate arch blocks ---
+      dalpha = (math.pi - 2.0*angini*math.degrad) / nbseg
+      alpha0 = (math.pi - angini*math.degrad)
+      loop i (1, nbseg)
+        alpha = alpha0 - ((i-1) * dalpha)
+        y1 = yj0 + r1 * math.cos (alpha)
+        z1 = zj0 + r1 * math.sin (alpha)
+        y2 = yj0 + r2 * math.cos (alpha)
+        z2 = zj0 + r2 * math.sin (alpha)
+        alphan = alpha0 - ((i) * dalpha)
+        y1n = yj0 + r1 * math.cos (alphan)
+        z1n = zj0 + r1 * math.sin (alphan)
+        y2n = yj0 + r2 * math.cos (alphan)
+        z2n = zj0 + r2 * math.sin (alphan)
+        command
+          block create prism face-1 [xa] [y1] [z1]  [xa] [y2] [z2]  [xb] [y2] [z2]  [xb] [y1] [z1]  ...
+                             face-2 [xa] [y1n] [z1n]  [xa] [y2n] [z2n]  [xb] [y2n] [z2n]  [xb] [y1n] [z1n]  ...
+                             group [vagroup]
+        endcommand
+        bvaid(i,j) = block.head
+        io.out(' i '+string(i)+' j '+string(j)+' bvaid '+string(bvaid(i,j)))
+        block.extra(ibnew,1) = i
+        block.extra(ibnew,2) = j
+        if i = 1
+          rhbbase = math.abs(y2)
+          rzbbase = math.abs(z2)
+        endif
+      endloop
+
+      ; --- base blocks ---
+      if ibbase = 1
+        alpha = alpha0
+        y1 = yj0 + r1 * math.cos (alpha)
+        z1 = zj0 + r1 * math.sin (alpha)
+        y2 = yj0 + r2 * math.cos (alpha)
+        z2 = zj0 + r2 * math.sin (alpha)
+        command
+          block create prism face-1 [xa] [y1] [zbbase]  [xa] [y2] [zbbase]  [xb] [y2] [zbbase]  [xb] [y1] [zbbase]  ...
+                             face-2 [xa] [y1] [z1]  [xa] [y2] [z2]  [xb] [y2] [z2]  [xb] [y1] [z1]  ...
+                             group [basegroup]
+        endcommand
+
+        alphan = alpha0 - (nbseg * dalpha)
+        y1n = yj0 + r1 * math.cos (alphan)
+        z1n = zj0 + r1 * math.sin (alphan)
+        y2n = yj0 + r2 * math.cos (alphan)
+        z2n = zj0 + r2 * math.sin (alphan)
+        command
+          block create prism face-1 [xa] [y1n] [z1n]  [xa] [y2n] [z2n]  [xb] [y2n] [z2n]  [xb] [y1n] [z1n]  ...
+                             face-2 [xa] [y1n] [zbbase]  [xa] [y2n] [zbbase]  [xb] [y2n] [zbbase]  [xb] [y1n] [zbbase]  ...
+                             group [basegroup]
+        endcommand
+      endif
+      ; ------------------
+
+    endif ; idirxy=1
+
+  endloop
+
+  loop j (1,nblen)
+  loop i (1,nbseg)
+    io.out(' i '+string(i)+' j '+string(j)+' bvaid '+string(bvaid(i,j)))
+  endloop
+  endloop
+
+  ; join blocks
+  loop j (1,nblen-1)
+  loop i (1,nbseg)
+    command
+      block hide
+    endcommand
+    ieven = 0
+    if 2*int(i/2) = i
+      ieven = 1
+    endif
+    jeven = 0
+    if 2*int(j/2) = j
+      jeven = 1
+    endif
+    flag = 0
+    if ijoin = 1
+      if ieven = 0
+        if jeven = 0
+          flag = 1
+        endif
+      endif
+      if ieven = 1
+        if jeven = 1
+          flag = 1
+        endif
+      endif
+    endif
+    if ijoin = 2
+      if ieven = 1
+        if jeven = 0
+          flag = 1
+        endif
+      endif
+      if ieven = 0
+        if jeven = 1
+          flag = 1
+        endif
+      endif
+    endif
+    if flag=1
+        bid1 = block.id(bvaid(i,j))
+        bid2 = block.id(bvaid(i,j+1))
+        command
+          block hide off range id [bid1]
+          block hide off range id [bid2]
+        endcommand
+        if ielast = 0
+          command
+            block join
+          endcommand
+        else
+          command
+            block contact group [elgroup]
+          endcommand
+        endif
+     endif
+  endloop
+  endloop
+
+end
+; -----------------------------------------------
+; --- run function  ---
+; [vacirc]
+
