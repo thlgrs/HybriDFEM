@@ -275,7 +275,6 @@ class FE(ABC):
     def get_p_glob(self, q_glob):
         pass
 
-
 class Timoshenko(FE):
     def __init__(self, nodes, mat: Material, geom):
         super().__init__(nodes, np.zeros(6, dtype=int))

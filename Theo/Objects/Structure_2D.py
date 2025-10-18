@@ -947,7 +947,7 @@ class Structure_block(Structure_2D):
         self.dof_fix = np.array([], dtype=int)
         self.dof_free = np.arange(self.nb_dofs, dtype=int)
         self.nb_dof_fix = 0
-        self.nb_dof_free = self.nb_dofs
+        self.nb_dof_free = len(self.dof_free)
 
     def detect_interfaces(self, eps=1e-9, margin=0.01):
         def overlap_colinear(seg1, seg2, eps=1e-9):
@@ -1363,7 +1363,7 @@ class Hybrid(Structure_block, Structure_FEM):
         self.dof_fix = np.array([], dtype=int)
         self.dof_free = np.arange(self.nb_dofs, dtype=int)
         self.nb_dof_fix = 0
-        self.nb_dof_free = self.nb_dofs
+        self.nb_dof_free = len(self.dof_free)
 
     def get_P_r(self):
         self.dofs_defined()
@@ -1438,7 +1438,7 @@ class Structure_block(Structure_2D):
         self.dof_fix = np.array([], dtype=int)
         self.dof_free = np.arange(self.nb_dofs, dtype=int)
         self.nb_dof_fix = 0
-        self.nb_dof_free = self.nb_dofs
+        self.nb_dof_free = len(self.dof_free)
 
 
 class Structure_FEM(Structure_2D):
@@ -1446,12 +1446,12 @@ class Structure_FEM(Structure_2D):
         super().__init__()
         self.list_fes: List[FE] = []
 
-        def _make_nodes_fem(self):
-            for fe in self.list_fes:
-                for j, node in enumerate(fe.nodes):
-                    index = self._add_node_if_new(
-                        node)  # new or existing index of the node of the element in Structure_2D
-                    fe.make_connect(index, j)  # create the connection vector of the element
+    def _make_nodes_fem(self):
+        for fe in self.list_fes:
+            for j, node in enumerate(fe.nodes):
+                index = self._add_node_if_new(
+                    node)  # new or existing index of the node of the element in Structure_2D
+                fe.make_connect(index, j)  # create the connection vector of the element
 
     def make_nodes(self):
         self._make_nodes_fem()
