@@ -45,12 +45,41 @@ default = float
 
 
 class Structure_2D:
-
     def __init__(self):
-
         self.list_blocks = []
         self.list_fes = []
         self.list_nodes = []
+
+    def make_nodes(self):
+        def node_exists(node):
+            for i, n in enumerate(self.list_nodes):
+                if np.all(np.isclose(n, node, rtol=1e-8)): return i, True
+            return -1, False
+
+        self.list_nodes = []
+        for i, bl in enumerate(self.list_blocks):
+            index, exists = node_exists(bl.ref_point)
+            if exists:
+                bl.make_connect(index)
+            else:
+                self.list_nodes.append(bl.ref_point.copy())
+                bl.make_connect(len(self.list_nodes) - 1)
+        for i, fe in enumerate(self.list_fes):
+            for j, node in enumerate(fe.nodes):
+                index, exists = node_exists(node)
+                if exists:
+                    fe.make_connect(index, j)
+                else:
+                    self.list_nodes.append(node)
+                    fe.make_connect(len(self.list_nodes) - 1, j)
+        self.nb_dofs = 3 * len(self.list_nodes)
+        self.U = np.zeros(self.nb_dofs, dtype=default)
+        self.P = np.zeros(self.nb_dofs, dtype=default)
+        self.P_fixed = np.zeros(self.nb_dofs, dtype=default)
+        self.dof_fix = np.array([], dtype=int)
+        self.dof_free = np.arange(self.nb_dofs, dtype=int)
+        self.nb_dof_fix = 0
+        self.nb_dof_free = self.nb_dofs
 
     def add_fe(self, N1, N2, E, nu, h, b=1, lin_geom=True, rho=0.):
 
@@ -652,38 +681,26 @@ class Structure_2D:
                 self.add_block(np.array(vertices), rho, b=b, material=material)
 
     def make_nodes(self):
-
         def node_exists(node):
-
             for i, n in enumerate(self.list_nodes):
                 if np.all(np.isclose(n, node, rtol=1e-8)): return i, True
-
             return -1, False
-
         self.list_nodes = []
-
         for i, bl in enumerate(self.list_blocks):
-
             index, exists = node_exists(bl.ref_point)
-
             if exists:
                 bl.make_connect(index)
             else:
                 self.list_nodes.append(bl.ref_point.copy())
                 bl.make_connect(len(self.list_nodes) - 1)
-
         for i, fe in enumerate(self.list_fes):
-
             for j, node in enumerate(fe.nodes):
-
                 index, exists = node_exists(node)
-
                 if exists:
                     fe.make_connect(index, j)
                 else:
                     self.list_nodes.append(node)
                     fe.make_connect(len(self.list_nodes) - 1, j)
-
         self.nb_dofs = 3 * len(self.list_nodes)
         self.U = np.zeros(self.nb_dofs, dtype=default)
         self.P = np.zeros(self.nb_dofs, dtype=default)

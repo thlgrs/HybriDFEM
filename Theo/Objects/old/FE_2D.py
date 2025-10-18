@@ -26,13 +26,17 @@ class FE_Mesh:
             element_size: float = 0.1,
             order: int = 2,  # 1=linear, 2=quadratic
             name: str = "myMesh",
-            edge_groups: Optional[Dict[str, List[int]]] = None,  # indices into boundary edges (CCW)
+            edge_groups: Optional[
+                Dict[str, List[int]]
+            ] = None,  # indices into boundary edges (CCW)
     ):
         if points is None and mesh_file is None:
             raise ValueError("Provide either `points` or `mesh_file`.")
         self.points_list = points
         self.mesh_file = mesh_file
-        self.element_type = "triangle" if element_type in ("tri", "triangle") else "quad"
+        self.element_type = (
+            "triangle" if element_type in ("tri", "triangle") else "quad"
+        )
         self.element_size = float(element_size)
         self.order = int(order)
         self.name = str(name)
@@ -47,7 +51,9 @@ class FE_Mesh:
         physical groups: 'domain' (surface) and named line groups in edge_groups.
         """
         if self.points_list is None:
-            raise RuntimeError("Cannot generate: no geometry defined (points_list is None).")
+            raise RuntimeError(
+                "Cannot generate: no geometry defined (points_list is None)."
+            )
 
         gmsh_init_here = not gmsh.isInitialized()
         if gmsh_init_here:
@@ -56,8 +62,14 @@ class FE_Mesh:
             gmsh.model.add(self.name)
 
             # Points + boundary lines
-            pts = [gmsh.model.geo.addPoint(x, y, 0.0, self.element_size) for x, y in self.points_list]
-            lines = [gmsh.model.geo.addLine(pts[i], pts[(i + 1) % len(pts)]) for i in range(len(pts))]
+            pts = [
+                gmsh.model.geo.addPoint(x, y, 0.0, self.element_size)
+                for x, y in self.points_list
+            ]
+            lines = [
+                gmsh.model.geo.addLine(pts[i], pts[(i + 1) % len(pts)])
+                for i in range(len(pts))
+            ]
             loop = gmsh.model.geo.addCurveLoop(lines)
             surface = gmsh.model.geo.addPlaneSurface([loop])
             gmsh.model.geo.synchronize()
@@ -67,7 +79,9 @@ class FE_Mesh:
             gmsh.model.setPhysicalName(2, dom_tag, "domain")
             for name, line_indices in (self.edge_groups or {}).items():
                 try:
-                    phys = gmsh.model.addPhysicalGroup(1, [lines[i] for i in line_indices])
+                    phys = gmsh.model.addPhysicalGroup(
+                        1, [lines[i] for i in line_indices]
+                    )
                     gmsh.model.setPhysicalName(1, phys, name)
                 except Exception as e:
                     print(f"[warn] failed creating physical group '{name}': {e}")
@@ -131,7 +145,9 @@ class FE_Mesh:
         groups: Dict[str, set[int]] = {}
 
         # tag -> name for 1D entities
-        tag_to_name = {tag: name for name, (tag, dim) in mesh.field_data.items() if dim == 1}
+        tag_to_name = {
+            tag: name for name, (tag, dim) in mesh.field_data.items() if dim == 1
+        }
 
         # Preferred path: block-aligned lists in mesh.cell_data["gmsh:physical"]
         phys_by_block = None
@@ -173,7 +189,9 @@ class FE_Mesh:
         return self.compute_physical_node_groups(self.read_mesh())
 
     # -- Quick plot ----------------------------------------------------------
-    def plot(self, save_path: Optional[str] = None, title: Optional[str] = None) -> None:
+    def plot(
+            self, save_path: Optional[str] = None, title: Optional[str] = None
+    ) -> None:
         mesh = self.read_mesh()
         pts = mesh.points[:, :2]
         segs: List[Tuple[np.ndarray, np.ndarray]] = []
@@ -238,16 +256,16 @@ class FE_Material:
         E, v = self.E, self.nu
         if self.plane == "stress":
             return (E / (1 - v * v)) * np.array(
-                [[1, v, 0],
-                 [v, 1, 0],
-                 [0, 0, (1 - v) / 2]]
+                [[1, v, 0], [v, 1, 0], [0, 0, (1 - v) / 2]]
             )
         if self.plane == "strain":
             factor = E * (1 - v) / ((1 + v) * (1 - 2 * v))
             return factor * np.array(
-                [[1, v / (1 - v), 0],
-                 [v / (1 - v), 1, 0],
-                 [0, 0, (1 - 2 * v) / (2 * (1 - v))]]
+                [
+                    [1, v / (1 - v), 0],
+                    [v / (1 - v), 1, 0],
+                    [0, 0, (1 - 2 * v) / (2 * (1 - v))],
+                ]
             )
         raise ValueError("Material.plane must be 'stress' or 'strain'")
 
@@ -255,12 +273,14 @@ class FE_Material:
 # =============================
 # FE Core
 # =============================
-class FE:
+class FE_2D:
     # ---- Element stiffness -------------------------------------------------
     @staticmethod
-    def element_stiffness_T3(coords: np.ndarray, D: np.ndarray, t: float = 1.0) -> np.ndarray:
-        x1, y1 = coords[0];
-        x2, y2 = coords[1];
+    def element_stiffness_T3(
+            coords: np.ndarray, D: np.ndarray, t: float = 1.0
+    ) -> np.ndarray:
+        x1, y1 = coords[0]
+        x2, y2 = coords[1]
         x3, y3 = coords[2]
         A = 0.5 * abs((x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1))
         if A <= 1e-16:
@@ -273,21 +293,33 @@ class FE:
             B[1, 2 * i + 1] = c[i]
             B[2, 2 * i] = c[i]
             B[2, 2 * i + 1] = b[i]
-        B /= (2 * A)
+        B /= 2 * A
         return t * A * (B.T @ D @ B)
 
     @staticmethod
-    def element_stiffness_T6(coords: np.ndarray, D: np.ndarray, t: float = 1.0) -> np.ndarray:
+    def element_stiffness_T6(
+            coords: np.ndarray, D: np.ndarray, t: float = 1.0
+    ) -> np.ndarray:
         if coords.shape[0] != 6:
             raise ValueError("T6 element stiffness requires 6 node coordinates.")
         # 3-point triangle rule (exact for quadratic)
-        gps = [((1 / 6, 1 / 6), 1 / 6), ((2 / 3, 1 / 6), 1 / 6), ((1 / 6, 2 / 3), 1 / 6)]
+        gps = [
+            ((1 / 6, 1 / 6), 1 / 6),
+            ((2 / 3, 1 / 6), 1 / 6),
+            ((1 / 6, 2 / 3), 1 / 6),
+        ]
         Ke = np.zeros((12, 12), dtype=float)
 
         for (r, s), w in gps:
             L1, L2, L3 = r, s, 1 - r - s
-            dN_dr = np.array([4 * L1 - 1, 0, -(4 * L3 - 1), 4 * L2, -4 * L2, 4 * (L3 - L1)], dtype=float)
-            dN_ds = np.array([0, 4 * L2 - 1, -(4 * L3 - 1), 4 * L1, 4 * (L3 - L2), -4 * L1], dtype=float)
+            dN_dr = np.array(
+                [4 * L1 - 1, 0, -(4 * L3 - 1), 4 * L2, -4 * L2, 4 * (L3 - L1)],
+                dtype=float,
+            )
+            dN_ds = np.array(
+                [0, 4 * L2 - 1, -(4 * L3 - 1), 4 * L1, 4 * (L3 - L2), -4 * L1],
+                dtype=float,
+            )
 
             dN_dnat = np.vstack([dN_dr, dN_ds])  # (2,6)
             J = dN_dnat @ coords  # (2,2)
@@ -309,14 +341,20 @@ class FE:
         return Ke
 
     @staticmethod
-    def element_stiffness_Q4(coords: np.ndarray, D: np.ndarray, t: float = 1.0) -> np.ndarray:
+    def element_stiffness_Q4(
+            coords: np.ndarray, D: np.ndarray, t: float = 1.0
+    ) -> np.ndarray:
         gp = 1.0 / np.sqrt(3.0)
         points = [(-gp, -gp), (gp, -gp), (gp, gp), (-gp, gp)]
         Ke = np.zeros((8, 8), dtype=float)
 
         for xi, eta in points:
-            dN_dxi = 0.25 * np.array([-(1 - eta), (1 - eta), (1 + eta), -(1 + eta)], dtype=float)
-            dN_deta = 0.25 * np.array([-(1 - xi), -(1 + xi), (1 + xi), (1 - xi)], dtype=float)
+            dN_dxi = 0.25 * np.array(
+                [-(1 - eta), (1 - eta), (1 + eta), -(1 + eta)], dtype=float
+            )
+            dN_deta = 0.25 * np.array(
+                [-(1 - xi), -(1 + xi), (1 + xi), (1 - xi)], dtype=float
+            )
 
             J = np.zeros((2, 2), dtype=float)
             for i in range(4):
@@ -349,7 +387,9 @@ class FE:
         return x, w
 
     @staticmethod
-    def element_stiffness_Q8(coords: np.ndarray, D: np.ndarray, t: float = 1.0) -> np.ndarray:
+    def element_stiffness_Q8(
+            coords: np.ndarray, D: np.ndarray, t: float = 1.0
+    ) -> np.ndarray:
         if coords.shape[0] != 8:
             raise ValueError("Q8 element stiffness requires 8 node coordinates.")
 
@@ -360,27 +400,33 @@ class FE:
         for i, xi in enumerate(xi_list):
             for j, eta in enumerate(eta_list):
                 # Serendipity Q8 shape funcs
-                dN_dxi = 0.25 * np.array([
-                    (1 - eta) * (2 * xi + eta),
-                    (1 - eta) * (2 * xi - eta),
-                    (1 + eta) * (2 * xi + eta),
-                    (1 + eta) * (2 * xi - eta),
-                    -4 * xi * (1 - eta),
-                    2 * (1 - eta * eta),
-                    -4 * xi * (1 + eta),
-                    -2 * (1 - eta * eta)
-                ], dtype=float)
+                dN_dxi = 0.25 * np.array(
+                    [
+                        (1 - eta) * (2 * xi + eta),
+                        (1 - eta) * (2 * xi - eta),
+                        (1 + eta) * (2 * xi + eta),
+                        (1 + eta) * (2 * xi - eta),
+                        -4 * xi * (1 - eta),
+                        2 * (1 - eta * eta),
+                        -4 * xi * (1 + eta),
+                        -2 * (1 - eta * eta),
+                    ],
+                    dtype=float,
+                )
 
-                dN_deta = 0.25 * np.array([
-                    (1 - xi) * (2 * eta + xi),
-                    (1 + xi) * (2 * eta - xi),
-                    (1 + xi) * (2 * eta + xi),
-                    (1 - xi) * (2 * eta - xi),
-                    -2 * (1 - xi * xi),
-                    -4 * eta * (1 + xi),
-                    2 * (1 - xi * xi),
-                    -4 * eta * (1 - xi)
-                ], dtype=float)
+                dN_deta = 0.25 * np.array(
+                    [
+                        (1 - xi) * (2 * eta + xi),
+                        (1 + xi) * (2 * eta - xi),
+                        (1 + xi) * (2 * eta + xi),
+                        (1 - xi) * (2 * eta - xi),
+                        -2 * (1 - xi * xi),
+                        -4 * eta * (1 + xi),
+                        2 * (1 - xi * xi),
+                        -4 * eta * (1 - xi),
+                    ],
+                    dtype=float,
+                )
 
                 J = np.zeros((2, 2), dtype=float)
                 for k in range(8):
@@ -395,16 +441,19 @@ class FE:
                 invJ = np.linalg.inv(J)
 
                 # Rebuild N (not strictly needed for stiffness; here for completeness)
-                N = 0.25 * np.array([
-                    (1 - xi) * (1 - eta) * (-xi - eta - 1),
-                    (1 + xi) * (1 - eta) * (xi - eta - 1),
-                    (1 + xi) * (1 + eta) * (xi + eta - 1),
-                    (1 - xi) * (1 + eta) * (-xi + eta - 1),
-                    2 * (1 - xi * xi) * (1 - eta),
-                    2 * (1 + xi) * (1 - eta * eta),
-                    2 * (1 - xi * xi) * (1 + eta),
-                    2 * (1 - xi) * (1 - eta * eta)
-                ], dtype=float)
+                N = 0.25 * np.array(
+                    [
+                        (1 - xi) * (1 - eta) * (-xi - eta - 1),
+                        (1 + xi) * (1 - eta) * (xi - eta - 1),
+                        (1 + xi) * (1 + eta) * (xi + eta - 1),
+                        (1 - xi) * (1 + eta) * (-xi + eta - 1),
+                        2 * (1 - xi * xi) * (1 - eta),
+                        2 * (1 + xi) * (1 - eta * eta),
+                        2 * (1 - xi * xi) * (1 + eta),
+                        2 * (1 - xi) * (1 - eta * eta),
+                    ],
+                    dtype=float,
+                )
                 _ = N  # N might be useful later
 
                 B = np.zeros((3, 16), dtype=float)
@@ -474,10 +523,13 @@ class FE:
 
     # ---- Dirichlet helpers (partitioned elimination) ----------------------
     def build_dirichlet_from_group(
-            self, group_name: str,
+            self,
+            group_name: str,
             ux: Optional[float] = None,
             uy: Optional[float] = None,
-            func: Optional[Callable[[float, float], Tuple[Optional[float], Optional[float]]]] = None
+            func: Optional[
+                Callable[[float, float], Tuple[Optional[float], Optional[float]]]
+            ] = None,
     ) -> Dict[int, float]:
         """
         Returns {dof: value} for a physical line group.
@@ -493,11 +545,15 @@ class FE:
         for local, n in enumerate(node_ids):
             if func is not None:
                 uxi, uyi = func(*XY[local])
-                if uxi is not None: bc[2 * n] = float(uxi)
-                if uyi is not None: bc[2 * n + 1] = float(uyi)
+                if uxi is not None:
+                    bc[2 * n] = float(uxi)
+                if uyi is not None:
+                    bc[2 * n + 1] = float(uyi)
             else:
-                if ux is not None: bc[2 * n] = float(ux)
-                if uy is not None: bc[2 * n + 1] = float(uy)
+                if ux is not None:
+                    bc[2 * n] = float(ux)
+                if uy is not None:
+                    bc[2 * n + 1] = float(uy)
         return bc
 
     def solve_with_dirichlet(self, bc: Dict[int, float]) -> np.ndarray:
@@ -563,14 +619,15 @@ class FE:
         C = lil_matrix((len(self._C_rows), self.ndof), dtype=float)
         c = np.zeros(len(self._C_rows), dtype=float)
         for i, (dofs, coeffs, rhs) in enumerate(self._C_rows):
-            for d, a in zip(dofs, coeffs): C[i, d] = a
+            for d, a in zip(dofs, coeffs):
+                C[i, d] = a
             c[i] = rhs
         C = C.tocsr()
         K = self.K.tocsr()
         A = bmat([[K, C.transpose()], [C, None]], format="csr")
         rhs = np.concatenate([self.F, c])
         sol = spsolve(A, rhs)
-        self.u = sol[:self.ndof]
+        self.u = sol[: self.ndof]
         return self.u
 
     # ---- Neumann loads (consistent edge integration) ----------------------
@@ -634,8 +691,8 @@ class FE:
             for a in range(coords.shape[0]):
                 dx_dxi += dN_dxi[a] * coords[a, :]
             J = np.linalg.norm(dx_dxi)  # ds = |dx/dξ| dξ
-            xgp = (N @ coords[:, 0])
-            ygp = (N @ coords[:, 1])
+            xgp = N @ coords[:, 0]
+            ygp = N @ coords[:, 1]
             tx, ty = t_fun(xgp, ygp)
 
             # consistent nodal force: ∫ N^T t ds
@@ -645,8 +702,13 @@ class FE:
 
         return fe
 
-    def neumann_on_group(self, group_name: str, traction: Union[Tuple[float, float], Callable], *,
-                         kind: str = "vector"):
+    def neumann_on_group(
+            self,
+            group_name: str,
+            traction: Union[Tuple[float, float], Callable],
+            *,
+            kind: str = "vector",
+    ):
         """
         Apply traction along all 'line'/'line3' edges in a physical group.
 
@@ -703,9 +765,7 @@ class FE:
                 t_fun = traction
 
             fe_edge = self._edge_consistent_load(
-                coords=coords,
-                traction_func=t_fun,
-                order=1 if len(e) == 2 else 2
+                coords=coords, traction_func=t_fun, order=1 if len(e) == 2 else 2
             )
 
             # scatter-add into global RHS
@@ -751,10 +811,21 @@ class FE:
 if __name__ == "__main__":
     # Square, clamped left, uniform traction on right (triangle6 example)
     pts = [(0, 0), (1, 0), (1, 1), (0, 1)]
-    edges = {"left": [3], "right": [1], "bottom": [0], "top": [2]}  # edge indices in CCW order
+    edges = {
+        "left": [3],
+        "right": [1],
+        "bottom": [0],
+        "top": [2],
+    }  # edge indices in CCW order
 
-    mesh = FE_Mesh(points=pts, element_type="triangle", order=2,
-                   element_size=0.2, edge_groups=edges, name="square_T6")
+    mesh = FE_Mesh(
+        points=pts,
+        element_type="triangle",
+        order=2,
+        element_size=0.2,
+        edge_groups=edges,
+        name="square_T6",
+    )
     mesh.generate_mesh()
     mesh.plot(title="Generated mesh")
 

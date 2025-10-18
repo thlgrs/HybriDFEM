@@ -9,7 +9,6 @@ Created on Fri Jul 26 15:02:25 2024
 import math
 import os
 import warnings
-from abc import ABC, abstractmethod
 from typing import List, Union
 
 import numpy as np
@@ -18,7 +17,7 @@ from scipy.spatial import cKDTree
 
 from .Block import Block_2D
 from .ContactFace import CF_2D
-from .FE import Timoshenko_FE_2D
+from .FE import FE, Timoshenko, Element2D
 
 
 def custom_warning_format(message, category, filename, lineno, file=None, line=None):
@@ -28,11 +27,11 @@ def custom_warning_format(message, category, filename, lineno, file=None, line=N
 
 warnings.formatwarning = custom_warning_format
 
+from abc import ABC, abstractmethod
 class Structure_2D(ABC):
-    DOF_PER_NODE = 3  # [ux, uy, rz] typical planar frame; need to adjust for 2D FE
+    DOF_PER_NODE = 3  # [ux, uy, rz]
 
     def __init__(self):
-        super().__init__()
         self.list_nodes = []
 
         # OPTIMISATION
@@ -66,6 +65,48 @@ class Structure_2D(ABC):
     @abstractmethod
     def make_nodes(self):
         pass
+
+    @abstractmethod
+    def get_P_r(self):
+        pass
+
+    @abstractmethod
+    def get_M_str(self):
+        pass
+
+    @abstractmethod
+    def get_K_str(self):
+        pass
+
+    @abstractmethod
+    def get_K_str0(self):
+        pass
+
+    @abstractmethod
+    def get_K_str_LG(self):
+        pass
+
+    @abstractmethod
+    def set_lin_geom(self, lin_geom=True):
+        pass
+
+    def solve_linear(self):
+        self.get_P_r()
+        self.get_K_str0()
+
+        K_ff = self.K0[np.ix_(self.dof_free, self.dof_free)]
+        K_fr = self.K0[np.ix_(self.dof_free, self.dof_fix)]
+        K_rf = self.K0[np.ix_(self.dof_fix, self.dof_free)]
+        K_rr = self.K0[np.ix_(self.dof_fix, self.dof_fix)]
+
+        self.U[self.dof_free] = sc.linalg.solve(
+            K_ff,
+            self.P[self.dof_free]
+            + self.P_fixed[self.dof_free]
+            - K_fr @ self.U[self.dof_fix],
+        )
+        # self.P[self.dof_fix] = K_rf @ self.U[self.dof_free] + K_rr @ self.U[self.dof_fix]
+        self.get_P_r()
 
     # ============================================================
     # ---------------------- CORE HELPERS ------------------------
@@ -394,47 +435,6 @@ class Structure_2D(ABC):
         else:
             warnings.warn("Nodes to be fixed must be int, list of ints or numpy array (size==2)")
 
-    # ===========================================================
-    # -------------------- Solving methods ----------------------
-    # ===========================================================
-    @abstractmethod
-    def get_P_r(self):
-        pass
-
-    @abstractmethod
-    def get_M_str(self):
-        pass
-
-    @abstractmethod
-    def get_K_str(self):
-        pass
-
-    @abstractmethod
-    def get_K_str0(self):
-        pass
-
-    @abstractmethod
-    def get_K_str_LG(self):
-        pass
-
-    def solve_linear(self):
-        self.get_P_r()
-        self.get_K_str0()
-
-        K_ff = self.K0[np.ix_(self.dof_free, self.dof_free)]
-        K_fr = self.K0[np.ix_(self.dof_free, self.dof_fix)]
-        K_rf = self.K0[np.ix_(self.dof_fix, self.dof_free)]
-        K_rr = self.K0[np.ix_(self.dof_fix, self.dof_fix)]
-
-        self.U[self.dof_free] = sc.linalg.solve(
-            K_ff,
-            self.P[self.dof_free]
-            + self.P_fixed[self.dof_free]
-            - K_fr @ self.U[self.dof_fix],
-        )
-        # self.P[self.dof_fix] = K_rf @ self.U[self.dof_free] + K_rr @ self.U[self.dof_fix]
-        self.get_P_r()
-
     def set_damping_properties(self, xsi=0.0, damp_type="RAYLEIGH", stiff_type="INIT"):
         if isinstance(xsi, float):
             self.xsi = [xsi, xsi]
@@ -687,10 +687,6 @@ class Structure_2D(ABC):
 
         with open(filename + ".pkl", "wb") as file:
             pickle.dump(self, file)
-
-    @abstractmethod
-    def set_lin_geom(self, lin_geom=True):
-        pass
 
 class Structure_block(Structure_2D):
     def __init__(self, listBlocks: Union[List[Block_2D], None] = None):
@@ -1235,7 +1231,7 @@ class Structure_block(Structure_2D):
 class Structure_FEM(Structure_2D):
     def __init__(self):
         super().__init__()
-        self.list_fes: List[] = []
+        self.list_fes: List[FE] = []
 
     @classmethod
     @abstractmethod
@@ -1243,8 +1239,8 @@ class Structure_FEM(Structure_2D):
         pass
     
     # Construction methods
-    def add_fe(self, nodes, mat, geom):
-        self.list_fes.append(Timoshenko_FE_2D(nodes, mat, geom))
+    def add_fe(self, nodes, mat, geom):  # TODO complete with Element2D
+        self.list_fes.append(Timoshenko(nodes, mat, geom))
 
     # Generation methods
     def _make_nodes_fem(self):
@@ -1262,9 +1258,8 @@ class Structure_FEM(Structure_2D):
         self.P_fixed = np.zeros(self.nb_dofs, dtype=float)
         rot_to_fix = []
         for fe in self.list_fes:
-            if isinstance(fe, FE_2D):
+            if isinstance(fe, Element2D):
                 rot_to_fix.extend(fe.rotation_dofs.tolist())
-
         if rot_to_fix:
             self.dof_fix = np.unique(np.array(rot_to_fix, dtype=int))
             self.dof_free = np.setdiff1d(np.arange(self.nb_dofs, dtype=int), self.dof_fix, assume_unique=False)
@@ -1380,11 +1375,9 @@ class Hybrid(Structure_block, Structure_FEM):
     def get_M_str(self, no_inertia: bool = False):
         self.dofs_defined()
         self.M = np.zeros((self.nb_dofs, self.nb_dofs), dtype=float)
-
         # Compose contributions
         self._mass_block(no_inertia=no_inertia)
         self._mass_fem(no_inertia=no_inertia)
-
         return self.M
 
     def get_K_str(self):
@@ -1414,3 +1407,89 @@ class Hybrid(Structure_block, Structure_FEM):
 
         for fe in self.list_fes:
             fe.lin_geom = lin_geom
+
+
+class Structure_2D(ABC):
+    def __init__(self):
+        self.list_nodes = []
+
+    @abstractmethod
+    def make_nodes(self):
+        pass
+
+
+class Structure_block(Structure_2D):
+    def __init__(self, listBlocks: Union[List[Block_2D], None] = None):
+        super().__init__()
+        self.list_blocks = listBlocks or []
+        self.list_cfs: List[CF_2D] = []
+
+    def _make_nodes_block(self):
+        for block in self.list_blocks:
+            index = self._add_node_if_new(block.ref_point)
+            block.make_connect(index)
+
+    def make_nodes(self):
+        self._make_nodes_block()
+        self.nb_dofs = 3 * len(self.list_nodes)
+        self.U = np.zeros(self.nb_dofs, dtype=float)
+        self.P = np.zeros(self.nb_dofs, dtype=float)
+        self.P_fixed = np.zeros(self.nb_dofs, dtype=float)
+        self.dof_fix = np.array([], dtype=int)
+        self.dof_free = np.arange(self.nb_dofs, dtype=int)
+        self.nb_dof_fix = 0
+        self.nb_dof_free = self.nb_dofs
+
+
+class Structure_FEM(Structure_2D):
+    def __init__(self):
+        super().__init__()
+        self.list_fes: List[FE] = []
+
+        def _make_nodes_fem(self):
+            for fe in self.list_fes:
+                for j, node in enumerate(fe.nodes):
+                    index = self._add_node_if_new(
+                        node)  # new or existing index of the node of the element in Structure_2D
+                    fe.make_connect(index, j)  # create the connection vector of the element
+
+    def make_nodes(self):
+        self._make_nodes_fem()
+
+        self.nb_dofs = 3 * len(self.list_nodes)
+        self.U = np.zeros(self.nb_dofs, dtype=float)
+        self.P = np.zeros(self.nb_dofs, dtype=float)
+        self.P_fixed = np.zeros(self.nb_dofs, dtype=float)
+        rot_to_fix = []  # no rotation dof for Element2D TODO
+        for fe in self.list_fes:
+            if isinstance(fe, Element2D):
+                rot_to_fix.extend(fe.rotation_dofs.tolist())
+        if rot_to_fix:
+            self.dof_fix = np.unique(np.array(rot_to_fix, dtype=int))
+            self.dof_free = np.setdiff1d(np.arange(self.nb_dofs, dtype=int), self.dof_fix, assume_unique=False)
+        else:
+            self.dof_fix = np.array([], dtype=int)
+            self.dof_free = np.arange(self.nb_dofs, dtype=int)
+
+        self.nb_dof_fix = len(self.dof_fix)
+        self.nb_dof_free = len(self.dof_free)
+
+
+class Hybrid(Structure_block, Structure_FEM):
+    def __init__(self):
+        super().__init__()
+
+    def make_nodes(self):
+        # Call each method separately
+        self._make_nodes_block()
+        self._make_nodes_fem()
+
+        # Initialize DOFs
+        self.nb_dofs = 3 * len(self.list_nodes)
+        self.U = np.zeros(self.nb_dofs, dtype=float)
+        self.P = np.zeros(self.nb_dofs, dtype=float)
+        self.P_fixed = np.zeros(self.nb_dofs, dtype=float)
+        self.dof_fix = np.array([], dtype=int)
+        self.dof_free = np.arange(self.nb_dofs, dtype=int)
+        self.nb_dof_fix = 0
+        self.nb_dof_free = self.nb_dofs

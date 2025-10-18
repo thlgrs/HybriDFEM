@@ -1,3 +1,5 @@
+import time
+
 from .Structure_2D import *
 
 

@@ -1,4 +1,4 @@
-from Legacy.Objects import Mesh
+from Theo.Objects.old.FE_Mesh import Mesh
 
 # Example usage of the Mesh class
 if __name__ == '__main__':

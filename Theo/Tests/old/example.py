@@ -5,7 +5,7 @@ from fem import MeshHandler, Material2D, BoundaryConditions, LinearElasticSolver
 
 def main():
     # Initialize mesh handler
-    mesh_handler = MeshHandler("Theo's lab/output/beam_tri0.5.msh")
+    mesh_handler = MeshHandler("Theo/output/beam_tri0.5.msh")
     mesh_handler.load_mesh()
     mesh_handler.setup_domain()
     

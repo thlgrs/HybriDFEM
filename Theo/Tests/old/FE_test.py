@@ -3,11 +3,11 @@ from pathlib import Path
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-from Theo.Mesh_test import gen_sizes
 
-from Legacy.Objects import FE_2D, Material
+from Theo.Objects.old.FE_2D import FE, FE_Material
+from old.Mesh_test import gen_sizes
 
-STEEL = Material(E=210e9, nu=0.30, plane="stress", rho=0)
+STEEL = FE_Material(E=210e9, nu=0.30, plane="stress", rho=0)
 SIZES = [
     4,
     2,

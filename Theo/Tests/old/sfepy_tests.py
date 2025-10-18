@@ -12,8 +12,8 @@ from sfepy.solvers.nls import Newton
 from sfepy.terms import Term
 
 # Load a 2D mesh of a rectangle (triangular elements)
-input_mesh = "Theo's lab/output/beam_tri0.5.msh"
-temp_mesh = "Theo's lab/output/temp_beam_tri0.5.vtk"
+input_mesh = "Theo/output/beam_tri0.5.msh"
+temp_mesh = "Theo/output/temp_beam_tri0.5.vtk"
 mesh = Mesh.from_file(input_mesh)
 mesh.coors[:, 2] = 0.0  # remove z-component
 mesh.write(temp_mesh, io="auto")

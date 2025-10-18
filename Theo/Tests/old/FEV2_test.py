@@ -1,7 +1,7 @@
 from Legacy.Objects import FE, Material
 
 if __name__ == "__main__":
-    mesh_file = "triMesh.msh"
+    mesh_file = "output/triMesh.msh"
 
     material = Material(E=210e9, nu=0.3, rho=7800, plane="stress")
     fe = FE(mesh_file, material)

@@ -1,6 +1,6 @@
 import numpy as np
 
-from Legacy.Objects import FE_Mesh, FE_Material, FE  # adapt the import path
+from Theo.Objects.old.FE_2D import FE_Mesh, FE_Material, FE_2D  # adapt the import path
 
 if __name__ == "__main__":
     # -------------------------------------------------------------------------
@@ -29,7 +29,7 @@ if __name__ == "__main__":
 
     # -------------------------------------------------------------------------
     # FE model ----------------------------------------------------------------
-    fe = FE(mesh, mat, thickness=0.01)  # plate thickness 10 mm
+    fe = FE_2D(mesh, mat, thickness=0.01)  # plate thickness 10 mm
     fe.assemble_stiffness_matrix()
 
     # Boundary conditions -----------------------------------------------------

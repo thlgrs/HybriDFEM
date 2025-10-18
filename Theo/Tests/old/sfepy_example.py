@@ -3,7 +3,7 @@ def linear_elasticity():
     import numpy as np
 
     # Load a 2D mesh of a rectangle (triangular elements)
-    mesh = Mesh.from_file("cantilever.msh")
+    mesh = Mesh.from_file("output/cantilever.msh")
     mesh.coors[:, 2] = 0.0  # remove z-component
     mesh.write("2D_mesh.vtk", io="auto")
     mesh = Mesh.from_file("2D_mesh.vtk")
@@ -124,10 +124,10 @@ def linear_elasticity2():
     # ------------------------------------------------------------------
     # 1. Mesh and domain
     # ------------------------------------------------------------------
-    mesh = Mesh.from_file("cantilever.msh")
+    mesh = Mesh.from_file("output/cantilever.msh")
     mesh.coors[:, 2] = 0.0  # remove z-component
     mesh.write("cantilever.vtk", io="auto")
-    mesh = Mesh.from_file("cantilever.vtk")
+    mesh = Mesh.from_file("output/cantilever.vtk")
 
     domain = FEDomain("domain", mesh)
 

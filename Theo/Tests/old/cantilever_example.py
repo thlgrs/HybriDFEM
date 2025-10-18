@@ -92,7 +92,7 @@ def print_results(results):
     
 def main():
     # Mesh file path
-    mesh_path = "Theo's lab/output/beam_tri0.5.msh"
+    mesh_path = "Theo/output/beam_tri0.5.msh"
     
     # 1. Solve with default steel properties
     print("\nSolving cantilever beam with steel properties...")

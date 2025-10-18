@@ -162,7 +162,7 @@ class LinearElasticFEM:
 # Example usage:
 if __name__ == "__main__":
     # Create solver instance
-    fem_solver = LinearElasticFEM("Theo's lab/output/beam_tri0.5.msh")
+    fem_solver = LinearElasticFEM("Theo/output/beam_tri0.5.msh")
 
     # Get mesh bounds to help define regions
     bounds = fem_solver.get_mesh_bounds()
