@@ -1,4 +1,8 @@
 import time
+from copy import deepcopy
+
+import h5py
+import matplotlib.pyplot as plt
 
 from .Structure_2D import *
 

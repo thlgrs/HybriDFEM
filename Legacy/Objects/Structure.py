@@ -34,10 +34,10 @@ def custom_warning_format(message, category, filename, lineno, file=None, line=N
 
 warnings.formatwarning = custom_warning_format
 
-import Block as bl
-import ContactFace as cf
-import Material as mat
-import Timoshenko_FE as tfe
+import Legacy.Objects.Block as bl
+import Legacy.Objects.ContactFace as cf
+import Legacy.Objects.Material as mat
+import Legacy.Objects.Timoshenko_FE as tfe
 
 reload_modules()
 

@@ -17,7 +17,7 @@ from scipy.spatial import cKDTree
 
 from .Block import Block_2D
 from .ContactFace import CF_2D
-from .FE import FE, Timoshenko, Element2D
+from .FE import FE, Timoshenko, Element2D, Geometry2D
 
 
 def custom_warning_format(message, category, filename, lineno, file=None, line=None):
@@ -58,7 +58,6 @@ class Structure_2D(ABC):
         self.M = None
 
     @classmethod
-    @abstractmethod
     def from_Rhino(cls):
         pass
 
@@ -695,7 +694,6 @@ class Structure_block(Structure_2D):
         self.list_cfs: List[CF_2D] = []
 
     @classmethod
-    @abstractmethod
     def from_Rhino(cls):
         pass
     
@@ -1234,10 +1232,92 @@ class Structure_FEM(Structure_2D):
         self.list_fes: List[FE] = []
 
     @classmethod
-    @abstractmethod
     def from_Rhino(cls):
         pass
-    
+
+    def from_mesh(self, mesh, material, geometry: Geometry2D, element_class=None):
+        """
+        NEW METHOD for Structure_FEM class.
+
+        Populate Structure_FEM with Element2D objects from an FE_Mesh.
+
+        This bridges FE_Mesh (which reads Gmsh files) and Structure_FEM
+        (which performs FE analysis).
+
+        Args:
+            mesh: FE_Mesh instance with generated mesh
+            material: Material instance (PlaneStress or PlaneStrain)
+            geometry: Geometry2D instance specifying thickness
+            element_class: Optional override (T3, LST, or Q4).
+                          If None, auto-detected from mesh.
+
+        Example:
+            # Create and generate mesh
+            mesh = FE_Mesh(
+                points=[(0,0), (1,0), (1,1), (0,1)],
+                element_type='triangle',
+                element_size=0.1,
+                order=1
+            )
+            mesh.generate_mesh()
+
+            # Create structure and populate from mesh
+            structure = Structure_FEM()
+            mat = PlaneStress(E=200e9, nu=0.3, rho=7850)
+            geom = Geometry2D(t=0.01)
+            structure.from_mesh(mesh, mat, geom)
+
+            # Now make nodes and solve
+            structure.make_nodes()
+            # ... rest of analysis
+        """
+        from .FE import T3, T6, Q4  # Import element types
+
+        # Get mesh data
+        nodes = mesh.nodes()  # (n_nodes, 2) array
+        elements = mesh.elements()  # (n_elements, nodes_per_elem) array
+
+        if elements.shape[0] == 0:
+            raise ValueError(
+                f"Mesh has no elements. "
+                f"Check element_type='{mesh.element_type}' and order={mesh.order}"
+            )
+
+        # Auto-detect element type if not specified
+        if element_class is None:
+            n_nodes = elements.shape[1]
+            element_map = {
+                3: T3,  # Linear triangle
+                6: T6,  # Quadratic triangle
+                4: Q4,  # Bilinear quad
+                8: None  # Q8 not yet implemented
+            }
+
+            element_class = element_map.get(n_nodes)
+            if element_class is None:
+                raise NotImplementedError(
+                    f"Element with {n_nodes} nodes not yet supported"
+                )
+
+        # Create Element2D objects for each mesh element
+        n_elements = elements.shape[0]
+        print(f"Creating {n_elements} {element_class.__name__} elements from mesh...")
+
+        for elem_connectivity in elements:
+            # Get node coordinates for this element
+            elem_nodes = [
+                tuple(nodes[node_idx])
+                for node_idx in elem_connectivity
+            ]
+
+            # Create element instance
+            elem = element_class(elem_nodes, material, geometry)
+
+            # Add to structure's element list
+            self.list_fes.append(elem)
+
+        print(f"✓ Successfully added {len(self.list_fes)} elements")
+
     # Construction methods
     def add_fe(self, nodes, mat, geom):  # TODO complete with Element2D
         self.list_fes.append(Timoshenko(nodes, mat, geom))
@@ -1344,7 +1424,6 @@ class Hybrid(Structure_block, Structure_FEM):
         super().__init__()
 
     @classmethod
-    @abstractmethod
     def from_Rhino(cls):
         pass
     
@@ -1407,89 +1486,3 @@ class Hybrid(Structure_block, Structure_FEM):
 
         for fe in self.list_fes:
             fe.lin_geom = lin_geom
-
-
-class Structure_2D(ABC):
-    def __init__(self):
-        self.list_nodes = []
-
-    @abstractmethod
-    def make_nodes(self):
-        pass
-
-
-class Structure_block(Structure_2D):
-    def __init__(self, listBlocks: Union[List[Block_2D], None] = None):
-        super().__init__()
-        self.list_blocks = listBlocks or []
-        self.list_cfs: List[CF_2D] = []
-
-    def _make_nodes_block(self):
-        for block in self.list_blocks:
-            index = self._add_node_if_new(block.ref_point)
-            block.make_connect(index)
-
-    def make_nodes(self):
-        self._make_nodes_block()
-        self.nb_dofs = 3 * len(self.list_nodes)
-        self.U = np.zeros(self.nb_dofs, dtype=float)
-        self.P = np.zeros(self.nb_dofs, dtype=float)
-        self.P_fixed = np.zeros(self.nb_dofs, dtype=float)
-        self.dof_fix = np.array([], dtype=int)
-        self.dof_free = np.arange(self.nb_dofs, dtype=int)
-        self.nb_dof_fix = 0
-        self.nb_dof_free = len(self.dof_free)
-
-
-class Structure_FEM(Structure_2D):
-    def __init__(self):
-        super().__init__()
-        self.list_fes: List[FE] = []
-
-    def _make_nodes_fem(self):
-        for fe in self.list_fes:
-            for j, node in enumerate(fe.nodes):
-                index = self._add_node_if_new(
-                    node)  # new or existing index of the node of the element in Structure_2D
-                fe.make_connect(index, j)  # create the connection vector of the element
-
-    def make_nodes(self):
-        self._make_nodes_fem()
-
-        self.nb_dofs = 3 * len(self.list_nodes)
-        self.U = np.zeros(self.nb_dofs, dtype=float)
-        self.P = np.zeros(self.nb_dofs, dtype=float)
-        self.P_fixed = np.zeros(self.nb_dofs, dtype=float)
-        rot_to_fix = []  # no rotation dof for Element2D TODO
-        for fe in self.list_fes:
-            if isinstance(fe, Element2D):
-                rot_to_fix.extend(fe.rotation_dofs.tolist())
-        if rot_to_fix:
-            self.dof_fix = np.unique(np.array(rot_to_fix, dtype=int))
-            self.dof_free = np.setdiff1d(np.arange(self.nb_dofs, dtype=int), self.dof_fix, assume_unique=False)
-        else:
-            self.dof_fix = np.array([], dtype=int)
-            self.dof_free = np.arange(self.nb_dofs, dtype=int)
-
-        self.nb_dof_fix = len(self.dof_fix)
-        self.nb_dof_free = len(self.dof_free)
-
-
-class Hybrid(Structure_block, Structure_FEM):
-    def __init__(self):
-        super().__init__()
-
-    def make_nodes(self):
-        # Call each method separately
-        self._make_nodes_block()
-        self._make_nodes_fem()
-
-        # Initialize DOFs
-        self.nb_dofs = 3 * len(self.list_nodes)
-        self.U = np.zeros(self.nb_dofs, dtype=float)
-        self.P = np.zeros(self.nb_dofs, dtype=float)
-        self.P_fixed = np.zeros(self.nb_dofs, dtype=float)
-        self.dof_fix = np.array([], dtype=int)
-        self.dof_free = np.arange(self.nb_dofs, dtype=int)
-        self.nb_dof_fix = 0
-        self.nb_dof_free = self.nb_dofs

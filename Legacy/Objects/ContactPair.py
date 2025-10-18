@@ -17,7 +17,7 @@ import numpy as np
 import scipy as sc
 from scipy.optimize import root
 
-import Spring as sp
+import Legacy.Objects.Spring as sp
 
 
 def custom_warning_format(message, category, filename, lineno, file=None, line=None):

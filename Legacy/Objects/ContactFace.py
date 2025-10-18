@@ -12,7 +12,7 @@ from warnings import warn
 import matplotlib.pyplot as plt
 import numpy as np
 
-import ContactPair as CP
+import Legacy.Objects.ContactPair as CP
 
 
 def custom_warning_format(message, category, filename, lineno, file=None, line=None):

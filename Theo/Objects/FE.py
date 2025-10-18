@@ -13,6 +13,20 @@ from matplotlib.collections import LineCollection
 Array = np.ndarray
 
 
+@dataclass
+class Geometry2D:
+    """
+    Geometry parameters for 2D shell elements.
+
+    Attributes:
+        t: Thickness of the shell element [m]
+    """
+    t: float
+
+    def __post_init__(self):
+        if self.t <= 0:
+            raise ValueError(f"Thickness must be positive, got {self.t}")
+
 class FE_Mesh:
     """
     Create or read a 2D mesh (triangles or quads, linear or quadratic),
@@ -196,8 +210,7 @@ class Material(ABC):
         self.nu = nu  # Poisson's ratio
         self.rho = rho  # Density
 
-    @abstractmethod
-    @property
+
     def D(self) -> Array:
         """Return constitutive matrix (to be implemented by subclasses)."""
         raise NotImplementedError("Subclasses must implement D property.")
@@ -231,7 +244,6 @@ class PlaneStrain(Material):
             [nu / (1 - nu), 1, 0],
             [0, 0, (1 - 2 * nu) / (2 * (1 - nu))]
         ])
-
 
 @dataclass
 class QuadRule:
@@ -619,15 +631,30 @@ class Element2D(FE):
     natural coordinates of nodes, and a quadrature rule.
     """
 
-    def __init__(self, nodes: List[tuple[float, float]], mat: Material, geom):
-        self.t = float(geom.t)  # thickness
-        self.mat = mat  # material
-        self.nd = len(nodes)  # number of nodes
-        self.dpn = 2  # DoFs per node (u,v)
-        self.edof = self.nd * self.dpn  # element dofs
-        super().__init__(nodes, np.zeros(self.edof, dtype=int))
-        self.connect = np.zeros(self.nd)
-        self.lin_geom = None
+    def __init__(self, nodes: List[Tuple[float, float]], mat, geom: Geometry2D):
+        """
+        Initialize 2D finite element.
+
+        CHANGES FROM ORIGINAL:
+        - Added rotation_dofs initialization (was missing)
+        - Changed geom type hint to Geometry2D
+        """
+        self.t = float(geom.t)
+        self.mat = mat
+        self.nd = len(nodes)
+        self.dpn = 2  # DOF per node (u, v only)
+        self.edof = self.nd * self.dpn
+        self.nodes = [tuple(n) for n in nodes]
+
+        # Initialize connectivity
+        self.connect = np.zeros(self.nd, dtype=int)
+        self.dofs = np.zeros(self.edof, dtype=int)
+
+        # CRITICAL FIX: Initialize rotation_dofs
+        # This was missing and caused AttributeError in Structure_2D.make_nodes()
+        self.rotation_dofs = np.array([], dtype=int)
+
+        self.lin_geom = True
 
     # ----- API each subclass must provide -----
     @abstractmethod
@@ -743,21 +770,38 @@ class Element2D(FE):
         # x,y arrays length 3 (or 6 but use first 3 for area)
         return 0.5 * ((x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]))
 
-    def make_connect(self, connect, node_number):
+    def make_connect(self, connect: int, node_number: int) -> None:
         """
-        Set the connection vector between the local and global node index (here FE_2D and Structure).
-        For each element in the fe list.
-        Problems
-            -> definition of the list of fe? each tri/quad or the whole fe domain containing lots of elements
-                - creating the BIG list_fes in Structure_fem with a readMesh(mesh, mat, geom) (similar to add_fe (need also to rename it to Timo)
-            -> number of nodes depends on tri or quad
-            -> number of dofs = 2 per node so dependent of the interpolation order
+        CORRECTED make_connect() method for Element2D class.
+
+        Maps local element node to global structure node and DOFs.
+
+        CHANGES FROM ORIGINAL:
+        - Was just 'pass' - now fully implemented
+        - Properly handles 3 DOF/node structure (u, v, θ)
+        - Element only uses 2 DOF/node (u, v)
+        - Tracks rotation DOFs that need to be fixed
 
         Args:
-            connect: index of the node in Structure_2D (added in the structure list or already exist based on the coordinates of the element node)
-            node_number: node index of the element's node from fe.nodes
+            connect: Global node index in Structure_2D.list_nodes
+            node_number: Local node index in this element (0 to nd-1)
         """
-        pass
+        # Store global node index
+        self.connect[node_number] = connect
+
+        # Map to global DOFs
+        # Structure_2D uses 3*node_index + {0:u, 1:v, 2:θ}
+        # Element2D only uses u and v
+        base_dof = 3 * connect
+
+        # Map element DOFs (just u,v) to global structure DOFs
+        self.dofs[2 * node_number] = base_dof  # u component
+        self.dofs[2 * node_number + 1] = base_dof + 1  # v component
+
+        # Track rotation DOF (θ) that needs to be fixed/constrained
+        rotation_dof = base_dof + 2
+        if rotation_dof not in self.rotation_dofs:
+            self.rotation_dofs = np.append(self.rotation_dofs, rotation_dof)
 
     def get_mass(self):
         return self.Me_consistent()
@@ -789,8 +833,7 @@ class Q4(Element2D):
         return N, dN_dxi, dN_deta
 
     def quad_rule(self):
-        qr = self.gauss_2x2()
-        return qr.xi, qr.eta, qr.w
+        return self.gauss_2x2()
 
 class Q9(Element2D):
     # tensor-product 1D quad polynomials
@@ -834,7 +877,8 @@ class Q9(Element2D):
         qr = self.gauss_3x3()
         return qr.xi, qr.eta, qr.w
 
-class CST(Element2D):
+
+class T3(Element2D):
     # Constant Strain Triangle T3
     def N_dN(self, xi, eta):
         N = np.array([1 - xi - eta, xi, eta])
@@ -875,7 +919,8 @@ class CST(Element2D):
         Me[1::2, 1::2] = Msc
         return Me
 
-class LST(Element2D):
+
+class T6(Element2D):
     # Linear Strain Triangle T6
     """
     6-node quadratic triangle (LST) for plane stress/strain.

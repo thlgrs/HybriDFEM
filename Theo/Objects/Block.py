@@ -12,6 +12,8 @@ from warnings import warn
 import matplotlib.pyplot as plt
 import numpy as np
 
+from .Material import Material
+
 
 def custom_warning_format(message, category, filename, lineno, file=None, line=None):
     file_short_name = filename.replace(os.path.dirname(filename), "")
@@ -22,7 +24,7 @@ warnings.formatwarning = custom_warning_format
 
 
 class Block_2D:
-    def __init__(self, vertices, rho, b=1, material=None, ref_point=None):
+    def __init__(self, vertices, rho, b=1, material: Material = None, ref_point=None):
         # Initializing attributes of block
         self.connect = None
         self.dofs = np.zeros(3)
