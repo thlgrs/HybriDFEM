@@ -165,7 +165,6 @@ equations = Equations([equation])
 pb = Problem("elasticity_2D", equations=equations, domain=domain)
 pb.set_bcs(ebcs=Conditions([fix_left]))
 
-
 # Set up solvers: direct linear solver and Newton nonlinear solver
 ls = ScipyDirect({})  # empty options = default (direct LU solver)
 nls = Newton({"i_max": 1}, lin_solver=ls)  # i_max=1 is enough for linear problem

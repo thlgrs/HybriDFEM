@@ -3,9 +3,9 @@ from pathlib import Path
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from tests.Mesh_test import gen_sizes
 
-from Theo.Objects.old.FE_2D import FE, FE_Material
-from old.Mesh_test import gen_sizes
+from Depreciated.old.FE_2D import FE, FE_Material
 
 STEEL = FE_Material(E=210e9, nu=0.30, plane="stress", rho=0)
 SIZES = [
@@ -83,15 +83,15 @@ def error(approach, exact):
 
 
 def scientific_plot_latex(
-    x,
-    ys,
-    labels=None,
-    xlabel="",
-    ylabel="",
-    title="",
-    legend_loc="best",
-    save_path=None,
-    use_latex=True,
+        x,
+        ys,
+        labels=None,
+        xlabel="",
+        ylabel="",
+        title="",
+        legend_loc="best",
+        save_path=None,
+        use_latex=True,
 ):
     """
     Create a clean, publication-quality scientific plot with optional LaTeX typesetting.

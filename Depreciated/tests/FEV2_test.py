@@ -22,4 +22,3 @@ if __name__ == "__main__":
     print("Nodal displacements [u, v] (m):")
     for i, (ux, uy) in enumerate(disp):
         print(f" Node {i}: ux={ux:.6e}, uy={uy:.6e}")
-

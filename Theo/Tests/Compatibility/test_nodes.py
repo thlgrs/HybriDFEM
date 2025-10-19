@@ -11,7 +11,7 @@ def assert_close(a, b, tol=1e-9):
 
 
 def test_get_node_id_and_add_node_if_new(impls):
-    # Build two Structures (old/new) with the same API surface for nodes
+    # Build two Structures (tests/new) with the same API surface for nodes
     # We only validate behavior equivalence on get_node_id/_add_node_if_new
     for tag, mod in impls.items():
         s = getattr(mod, "Structure", None) or getattr(mod, "Structure_2D", None)

@@ -30,7 +30,7 @@ def _collect_signatures(struct, tol=1e-8):
 def test_detect_interfaces_equivalence(toy_scene):
     data, _, _ = toy_scene
     new_s = data["new"];
-    old_s = data["old"]
+    old_s = data["tests"]
 
     sig_new = _collect_signatures(new_s)
     sig_old = _collect_signatures(old_s)
@@ -42,7 +42,7 @@ def test_detect_interfaces_equivalence(toy_scene):
 def test_make_cfs_equivalence(toy_scene):
     data, _, _ = toy_scene
     new_s = data["new"];
-    old_s = data["old"]
+    old_s = data["tests"]
 
     if not hasattr(new_s, "make_cfs") or not hasattr(old_s, "make_cfs"):
         pytest.skip("make_cfs not available")

@@ -1,9 +1,10 @@
 # postprocess_impact.py
 
-import h5py
-import numpy as np
-import matplotlib.pyplot as plt
 import os
+
+import h5py
+import matplotlib.pyplot as plt
+import numpy as np
 
 # --- Load results from HDF5 file
 filename = r"W11_1_Impact_CDM_CDM_.h5"
@@ -135,7 +136,7 @@ with open(pkl_path, 'rb') as f:
 frame_folder = "Frames"
 os.makedirs(frame_folder, exist_ok=True)
 
-# --- Delete old frames if any
+# --- Delete tests frames if any
 for file in os.listdir(frame_folder):
     os.remove(os.path.join(frame_folder, file))
 

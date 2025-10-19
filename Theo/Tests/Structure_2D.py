@@ -19,10 +19,10 @@ Each example includes:
 import matplotlib.pyplot as plt
 import numpy as np
 
+from Theo import FE_Mesh, PlaneStress, Geometry2D
+from Theo import Static
+from Theo import Structure_block, Structure_FEM
 from Theo.Objects import Material as mat
-from Theo.Objects.FE import FE_Mesh, PlaneStress, Geometry2D
-from Theo.Objects.Solver import Static
-from Theo.Objects.Structure_2D import Structure_block, Structure_FEM
 
 
 # Mock imports - replace with actual imports
@@ -71,7 +71,7 @@ def example_1_structure_block():
     # Assemble and solve
     print("\nSolving...")
     # Static.solve_linear(structure)
-    Static.solve_forcecontrol(structure, 10, filename="out/force_control.h5")
+    Static.solve_forcecontrol(structure, 10, filename="Theo/Tests/Outputs/force_control.h5")
 
     print("✓ Solution converged")
     print(structure.get_M_str())

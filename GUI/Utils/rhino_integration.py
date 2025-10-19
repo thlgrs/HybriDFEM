@@ -406,7 +406,7 @@ def create_structure_from_rhino(file_path: str, structure_type: str = "Hybrid",
     Returns:
         Initialized structure with geometry
     """
-    from Theo.Objects.Structure_2D import Hybrid, Structure_FEM, Structure_block
+    from Theo import Hybrid, Structure_FEM, Structure_block
 
     # Import geometry
     importer = RhinoImporter(file_path)

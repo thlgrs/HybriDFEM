@@ -28,5 +28,8 @@ env/
 # IDE files and folders
 .vscode/
 
-#tests
-tests/output
+Depreciated
+
+Legacy/Examples
+
+Theo/Tests/Outputs

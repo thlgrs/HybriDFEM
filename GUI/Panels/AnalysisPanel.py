@@ -182,13 +182,13 @@ class AnalysisPanel(QWidget):
 
     def run_linear_static(self, structure):
         """Run linear static analysis"""
-        from Theo.Objects.Solver import Static
+        from Theo import Static
         self.progress_bar.setValue(50)
         Static.solve_linear(structure)
 
     def run_nonlinear_static(self, structure):
         """Run nonlinear static analysis"""
-        from Theo.Objects.Solver import Static
+        from Theo import Static
         steps = self.steps_input.value()
         tol = self.tolerance_input.value()
         self.progress_bar.setValue(50)
@@ -196,7 +196,7 @@ class AnalysisPanel(QWidget):
 
     def run_dynamic_linear(self, structure):
         """Run dynamic linear analysis"""
-        from Theo.Objects.Solver import Static
+        from Theo import Static
         T = self.time_input.value()
         dt = self.dt_input.value()
         self.progress_bar.setValue(50)
@@ -204,7 +204,7 @@ class AnalysisPanel(QWidget):
 
     def run_dynamic_nonlinear(self, structure):
         """Run dynamic nonlinear analysis"""
-        from Theo.Objects.Solver import Static
+        from Theo import Static
         T = self.time_input.value()
         dt = self.dt_input.value()
         self.progress_bar.setValue(50)
@@ -212,7 +212,7 @@ class AnalysisPanel(QWidget):
 
     def run_modal(self, structure):
         """Run modal analysis"""
-        from Theo.Objects.Solver import Modal
+        from Theo import Modal
         modes = self.modes_input.value()
         self.progress_bar.setValue(50)
         modal_solver = Modal(modes=modes)

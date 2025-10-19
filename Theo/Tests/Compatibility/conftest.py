@@ -36,16 +36,16 @@ def impls():
         )
     return {
         "new": _import(new_path),
-        "old": _import(old_path),
+        "tests": _import(old_path),
     }
 
 
 @pytest.fixture(scope="session")
 def factories(impls):
-    """Return factory callables for new/old implementations."""
+    """Return factory callables for new/tests implementations."""
     out = {}
 
-    for tag in ("new", "old"):
+    for tag in ("new", "tests"):
         fact_path = os.environ.get(f"{tag.upper()}_FACTORIES")
         if fact_path:
             mod = _import(fact_path)  # must expose create_structure, create_block
@@ -127,7 +127,7 @@ def toy_scene(factories):
     rect3 = np.array([[5.0, 0.0], [6.0, 0.0], [6.0, 1.0], [5.0, 1.0]])  # far away
 
     data = {}
-    for tag in ("new", "old"):
+    for tag in ("new", "tests"):
         s = factories[tag].create_structure()
         # Ensure required arrays exist if Structure expects them
         if not hasattr(s, "list_blocks"): s.list_blocks = []

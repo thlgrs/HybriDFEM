@@ -1,6 +1,6 @@
 import numpy as np
 
-from Theo.Objects.old.FE_2D import FE_Mesh, FE_Material, FE_2D  # adapt the import path
+from Depreciated.old.FE_2D import FE_Mesh, FE_Material, FE_2D  # adapt the import path
 
 if __name__ == "__main__":
     # -------------------------------------------------------------------------

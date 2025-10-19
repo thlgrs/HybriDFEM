@@ -32,7 +32,7 @@ def _assert_same_fix_sets(st_old, st_new):
 @pytest.mark.parametrize("fixed", [False, True])
 def test_load_node_equivalence(impls, fixed):
     # Create parallel structures and apply same loads via load_node
-    new_mod, old_mod = impls["new"], impls["old"]
+    new_mod, old_mod = impls["new"], impls["tests"]
     S = getattr(new_mod, "Structure", None) or getattr(new_mod, "Structure_2D", None)
     SO = getattr(old_mod, "Structure", None) or getattr(old_mod, "Structure_2D", None)
     st_new, st_old = S(), SO()
@@ -60,7 +60,7 @@ def test_load_node_equivalence(impls, fixed):
 
 
 def test_fix_node_equivalence(impls):
-    new_mod, old_mod = impls["new"], impls["old"]
+    new_mod, old_mod = impls["new"], impls["tests"]
     S = getattr(new_mod, "Structure", None) or getattr(new_mod, "Structure_2D", None)
     SO = getattr(old_mod, "Structure", None) or getattr(old_mod, "Structure_2D", None)
     st_new, st_old = S(), SO()
