@@ -78,7 +78,7 @@ def example_1_structure_block():
     print(structure.get_K_str())
     print(structure.get_P_r())
 
-    return
+    return structure
 
 
 # ============================================================================
@@ -172,54 +172,6 @@ def example_2_structure_fem():
     print("✓ Solution converged")
 
     return
-
-
-def plot_structure_fem_example(nodes, L_beam, L_plate, H_plate, x_offset):
-    """Visualize the FEM structure"""
-    fig, ax = plt.subplots(figsize=(12, 4))
-
-    # Plot beam elements
-    for i in range(len(nodes) - 1):
-        x = [nodes[i][0], nodes[i + 1][0]]
-        y = [nodes[i][1], nodes[i + 1][1]]
-        ax.plot(x, y, 'b-', linewidth=3, label='Beam' if i == 0 else '')
-        ax.plot(x, y, 'bo', markersize=8)
-
-    # Plot plate region (schematic)
-    plate_x = [x_offset, x_offset + L_plate, x_offset + L_plate, x_offset, x_offset]
-    plate_y = [-H_plate / 2, -H_plate / 2, H_plate / 2, H_plate / 2, -H_plate / 2]
-    ax.plot(plate_x, plate_y, 'r-', linewidth=2, label='2D Plate Mesh')
-    ax.fill(plate_x, plate_y, 'red', alpha=0.1)
-
-    # Add mesh lines (illustrative)
-    n_div = 5
-    for i in range(1, n_div):
-        # Vertical lines
-        x_line = x_offset + i * L_plate / n_div
-        ax.plot([x_line, x_line], [-H_plate / 2, H_plate / 2], 'r-', linewidth=0.5, alpha=0.5)
-        # Horizontal lines
-        y_line = -H_plate / 2 + i * H_plate / n_div
-        ax.plot([x_offset, x_offset + L_plate], [y_line, y_line], 'r-', linewidth=0.5, alpha=0.5)
-
-    # Boundary conditions
-    ax.plot(nodes[0][0], nodes[0][1], 'gs', markersize=15, label='Fixed')
-
-    # Load arrow
-    tip_x = x_offset + L_plate
-    ax.arrow(tip_x, 0, 0, -0.3, head_width=0.1, head_length=0.1,
-             fc='orange', ec='orange', linewidth=2, label='Load')
-
-    ax.set_xlabel('x [m]')
-    ax.set_ylabel('y [m]')
-    ax.set_aspect('equal')
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc='upper right')
-    ax.set_title('Structure_FEM: Mixed Timoshenko Beam + 2D Elements')
-
-    plt.tight_layout()
-    plt.savefig('/mnt/user-data/outputs/example2_structure_fem.png', dpi=150, bbox_inches='tight')
-    print("✓ Saved plot: example2_structure_fem.png")
-    plt.close()
 
 
 # ============================================================================
@@ -647,10 +599,10 @@ if __name__ == "__main__":
     # Run examples
     try:
         # Example 1: Structure_block
-        # blocks1 = example_1_structure_block()
+        blocks1 = example_1_structure_block()
 
         # Example 2: Structure_FEM
-        nodes2 = example_2_structure_fem()
+        # nodes2 = example_2_structure_fem()
 
         # Example 3: Hybrid
         # blocks3 = example_3_hybrid()

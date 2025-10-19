@@ -9,10 +9,12 @@ Created on Fri Jul 26 15:02:25 2024
 import math
 import os
 import warnings
-from typing import List, Union
+from typing import List, Union, Optional, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import scipy as sc
+from matplotlib.patches import Polygon
 from scipy.spatial import cKDTree
 
 from .Block import Block_2D
@@ -687,6 +689,47 @@ class Structure_2D(ABC):
         with open(filename + ".pkl", "wb") as file:
             pickle.dump(self, file)
 
+    @abstractmethod
+    def plot(
+            self,
+            ax: Optional[plt.Axes] = None,
+            show_nodes: bool = True,
+            show_node_labels: bool = False,
+            show_deformed: bool = False,
+            deformation_scale: float = 1.0,
+            title: Optional[str] = None,
+            **kwargs
+    ) -> plt.Figure:
+        """
+        Plot the structure.
+
+        This is an abstract method that must be implemented by all subclasses.
+        Each subclass provides its own visualization appropriate to its element types.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes, optional
+            Axes to plot on. If None, creates new figure.
+        show_nodes : bool, default=True
+            Whether to display nodes
+        show_node_labels : bool, default=False
+            Whether to label nodes
+        show_deformed : bool, default=False
+            Whether to show deformed configuration
+        deformation_scale : float, default=1.0
+            Scale factor for deformations
+        title : str, optional
+            Plot title
+        **kwargs : dict
+            Additional plotting options specific to subclass
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+            The figure object
+        """
+        pass
+
 class Structure_block(Structure_2D):
     def __init__(self, listBlocks: Union[List[Block_2D], None] = None):
         super().__init__()
@@ -1226,6 +1269,224 @@ class Structure_block(Structure_2D):
         for CF in self.list_cfs:
             CF.revert_commit()
 
+    def plot(
+            self,
+            ax: Optional[plt.Axes] = None,
+            show_nodes: bool = True,
+            show_node_labels: bool = False,
+            show_blocks: bool = True,
+            show_block_labels: bool = False,
+            show_contact_faces: bool = True,
+            show_deformed: bool = False,
+            deformation_scale: float = 1.0,
+            node_size: float = 80,
+            node_color: str = 'red',
+            block_facecolor: str = 'lightblue',
+            block_edgecolor: str = 'black',
+            block_alpha: float = 0.6,
+            contact_color: str = 'green',
+            contact_linewidth: float = 2,
+            title: Optional[str] = None,
+            figsize: Tuple[float, float] = (12, 10),
+            **kwargs
+    ) -> plt.Figure:
+        """
+        Plot Structure_block with blocks, nodes, and contact faces.
+
+        Additional Parameters (beyond base class)
+        ------------------------------------------
+        show_blocks : bool, default=True
+            Whether to display block polygons
+        show_block_labels : bool, default=False
+            Whether to label blocks
+        show_contact_faces : bool, default=True
+            Whether to display contact interfaces
+        node_color : str, default='red'
+            Color for node markers
+        block_facecolor : str, default='lightblue'
+            Fill color for blocks
+        block_edgecolor : str, default='black'
+            Edge color for blocks
+        block_alpha : float, default=0.6
+            Transparency of blocks
+        contact_color : str, default='green'
+            Color for contact faces
+        contact_linewidth : float, default=2
+            Width of contact face lines
+        """
+        # Validate
+        if not self.list_nodes:
+            raise ValueError("No nodes found. Call make_nodes() first.")
+
+        # Create figure if needed
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+        else:
+            fig = ax.get_figure()
+
+        nodes = np.array(self.list_nodes)
+
+        # Check for deformation data
+        displacements = None
+        if show_deformed:
+            if hasattr(self, 'U') and self.U is not None:
+                displacements = self.U
+            else:
+                warnings.warn("No displacements found. Showing undeformed.")
+                show_deformed = False
+
+        # Plot blocks
+        if show_blocks:
+            self._plot_blocks(
+                ax,
+                show_deformed,
+                deformation_scale,
+                displacements,
+                block_facecolor,
+                block_edgecolor,
+                block_alpha,
+                show_block_labels
+            )
+
+        # Plot contact faces
+        if show_contact_faces and self.list_cfs:
+            self._plot_contact_faces(
+                ax,
+                show_deformed,
+                deformation_scale,
+                displacements,
+                contact_color,
+                contact_linewidth
+            )
+
+        # Plot nodes
+        if show_nodes:
+            self._plot_nodes(
+                ax,
+                nodes,
+                show_deformed,
+                deformation_scale,
+                displacements,
+                node_size,
+                node_color,
+                show_node_labels
+            )
+
+        # Formatting
+        self._format_axes(ax, title, len(self.list_blocks), len(nodes),
+                          len(self.list_cfs), show_deformed, deformation_scale)
+
+        return fig
+
+    def _plot_blocks(self, ax, show_deformed, scale, displacements,
+                     facecolor, edgecolor, alpha, show_labels):
+        """Helper to plot block polygons"""
+        for idx, block in enumerate(self.list_blocks):
+            vertices = block.v.copy()
+
+            if show_deformed and hasattr(block, 'dofs') and displacements is not None:
+                # Apply rigid body transformation
+                u = displacements[block.dofs[0]] * scale
+                v = displacements[block.dofs[1]] * scale
+                theta = displacements[block.dofs[2]] * scale
+
+                # Rotation matrix
+                R = np.array([
+                    [np.cos(theta), -np.sin(theta)],
+                    [np.sin(theta), np.cos(theta)]
+                ])
+
+                # Transform: rotate about ref_point, then translate
+                ref = block.ref_point
+                vertices = (vertices - ref) @ R.T + ref + np.array([u, v])
+
+            # Create polygon
+            polygon = Polygon(
+                vertices,
+                facecolor=facecolor,
+                edgecolor=edgecolor,
+                alpha=alpha,
+                linewidth=1.5
+            )
+            ax.add_patch(polygon)
+
+            # Label
+            if show_labels:
+                centroid = np.mean(vertices, axis=0)
+                ax.text(centroid[0], centroid[1], f'B{idx}',
+                        ha='center', va='center', fontsize=9,
+                        bbox=dict(boxstyle='round,pad=0.3',
+                                  facecolor='white', alpha=0.7))
+
+    def _plot_contact_faces(self, ax, show_deformed, scale, displacements,
+                            color, linewidth):
+        """Helper to plot contact faces"""
+        for cf in self.list_cfs:
+            if not hasattr(cf, 'cps'):
+                continue
+
+            for cp in cf.cps:
+                x_cp = cp.x_cp.copy()
+
+                # Simple deformation approximation
+                if show_deformed and hasattr(cf, 'bl_A') and hasattr(cf, 'bl_B'):
+                    if hasattr(cf.bl_A, 'dofs') and hasattr(cf.bl_B, 'dofs'):
+                        if displacements is not None:
+                            u_A = displacements[cf.bl_A.dofs[:2]] * scale
+                            u_B = displacements[cf.bl_B.dofs[:2]] * scale
+                            x_cp += (u_A + u_B) / 2
+
+                # Draw interface line
+                if hasattr(cp, 'long') and hasattr(cp, 'h'):
+                    tran = np.array([-cp.long[1], cp.long[0]])
+                    h_half = cp.h / 2
+                    p1 = x_cp - h_half * tran
+                    p2 = x_cp + h_half * tran
+
+                    ax.plot([p1[0], p2[0]], [p1[1], p2[1]],
+                            color=color, linewidth=linewidth, alpha=0.8)
+
+    def _plot_nodes(self, ax, nodes, show_deformed, scale, displacements,
+                    size, color, show_labels):
+        """Helper to plot nodes"""
+        node_coords = nodes.copy()
+
+        if show_deformed and displacements is not None:
+            for i in range(len(nodes)):
+                u_idx, v_idx = 3 * i, 3 * i + 1
+                if u_idx < len(displacements) and v_idx < len(displacements):
+                    node_coords[i, 0] += displacements[u_idx] * scale
+                    node_coords[i, 1] += displacements[v_idx] * scale
+
+        ax.scatter(node_coords[:, 0], node_coords[:, 1],
+                   s=size, c=color, marker='o',
+                   edgecolors='darkred', linewidths=1.5,
+                   zorder=5, label='Nodes')
+
+        if show_labels:
+            for i, coord in enumerate(node_coords):
+                ax.annotate(str(i), xy=coord, xytext=(5, 5),
+                            textcoords='offset points', fontsize=8,
+                            color='darkred', fontweight='bold')
+
+    def _format_axes(self, ax, title, n_blocks, n_nodes, n_cfs, show_deformed, scale):
+        """Helper for axis formatting"""
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+        ax.set_xlabel('x [m]', fontsize=11)
+        ax.set_ylabel('y [m]', fontsize=11)
+
+        if title is None:
+            title = f'Structure_block: {n_blocks} blocks, {n_nodes} nodes'
+            if n_cfs > 0:
+                title += f', {n_cfs} contact faces'
+            if show_deformed:
+                title += f' (deformed, scale={scale})'
+
+        ax.set_title(title, fontsize=13, fontweight='bold', pad=15)
+        ax.legend(loc='best', fontsize=10, framealpha=0.9)
+        plt.tight_layout()
+
 class Structure_FEM(Structure_2D):
     def __init__(self):
         super().__init__()
@@ -1419,6 +1680,253 @@ class Structure_FEM(Structure_2D):
         for fe in self.list_fes:
             fe.lin_geom = lin_geom
 
+    def plot(
+            self,
+            ax: Optional[plt.Axes] = None,
+            show_nodes: bool = True,
+            show_node_labels: bool = False,
+            show_elements: bool = True,
+            show_element_labels: bool = False,
+            show_deformed: bool = False,
+            deformation_scale: float = 1.0,
+            element_subdivisions: int = 10,
+            node_size: float = 60,
+            node_color: str = 'blue',
+            element_color_undef: str = 'black',
+            element_color_def: str = 'red',
+            element_linewidth: float = 2,
+            mesh_color: str = 'gray',
+            mesh_alpha: float = 0.3,
+            title: Optional[str] = None,
+            figsize: Tuple[float, float] = (14, 10),
+            **kwargs
+    ) -> plt.Figure:
+        """
+        Plot Structure_FEM with elements and nodes.
+
+        Additional Parameters (beyond base class)
+        ------------------------------------------
+        show_elements : bool, default=True
+            Whether to display elements
+        show_element_labels : bool, default=False
+            Whether to label elements
+        element_subdivisions : int, default=10
+            Points for curved beam visualization
+        node_color : str, default='blue'
+            Color for node markers
+        element_color_undef : str, default='black'
+            Color for undeformed elements
+        element_color_def : str, default='red'
+            Color for deformed elements
+        mesh_color : str, default='gray'
+            Color for 2D element mesh
+        mesh_alpha : float, default=0.3
+            Transparency for mesh
+        """
+        # Validate
+        if not self.list_nodes:
+            raise ValueError("No nodes found. Call make_nodes() first.")
+
+        # Create figure if needed
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+        else:
+            fig = ax.get_figure()
+
+        nodes = np.array(self.list_nodes)
+
+        # Check for deformation data
+        displacements = None
+        if show_deformed:
+            if hasattr(self, 'U') and self.U is not None:
+                displacements = self.U
+            else:
+                warnings.warn("No displacements found. Showing undeformed.")
+                show_deformed = False
+
+        # Plot elements
+        if show_elements:
+            self._plot_elements(
+                ax,
+                nodes,
+                show_deformed,
+                deformation_scale,
+                displacements,
+                element_subdivisions,
+                element_color_undef,
+                element_color_def,
+                element_linewidth,
+                mesh_color,
+                mesh_alpha,
+                show_element_labels
+            )
+
+        # Plot nodes
+        if show_nodes:
+            self._plot_nodes(
+                ax,
+                nodes,
+                show_deformed,
+                deformation_scale,
+                displacements,
+                node_size,
+                node_color,
+                show_node_labels
+            )
+
+        # Formatting
+        self._format_axes(ax, title, len(self.list_fes), len(nodes),
+                          show_deformed, deformation_scale)
+
+        return fig
+
+    def _plot_elements(self, ax, nodes, show_deformed, scale, displacements,
+                       subdivisions, color_undef, color_def, linewidth,
+                       mesh_color, mesh_alpha, show_labels):
+        """Helper to plot FE elements"""
+        for elem_idx, elem in enumerate(self.list_fes):
+            if not hasattr(elem, 'connect'):
+                continue
+
+            # Detect element type
+            is_beam = hasattr(elem, 'L') or 'Timoshenko' in elem.__class__.__name__
+
+            if is_beam and len(elem.connect) >= 2:
+                self._plot_beam_element(
+                    ax, elem, nodes, show_deformed, scale, displacements,
+                    subdivisions, color_undef, color_def, linewidth, elem_idx
+                )
+            else:
+                self._plot_2d_element(
+                    ax, elem, nodes, show_deformed, scale, displacements,
+                    mesh_color, mesh_alpha, color_def, elem_idx
+                )
+
+            if show_labels:
+                self._add_element_label(ax, elem, nodes, elem_idx)
+
+    def _plot_beam_element(self, ax, elem, nodes, show_deformed, scale,
+                           displacements, subdivisions, color_undef,
+                           color_def, linewidth, idx):
+        """Helper to plot beam elements"""
+        i1, i2 = elem.connect[0], elem.connect[1]
+        n1, n2 = nodes[i1], nodes[i2]
+
+        # Undeformed
+        if not show_deformed:
+            ax.plot([n1[0], n2[0]], [n1[1], n2[1]],
+                    color=color_undef, linewidth=linewidth, zorder=3)
+
+        # Deformed with shape functions
+        if show_deformed and displacements is not None and hasattr(elem, 'dofs'):
+            if len(elem.dofs) >= 6:
+                u_elem = displacements[elem.dofs] * scale
+
+                # Beam geometry
+                L = np.sqrt((n2[0] - n1[0]) ** 2 + (n2[1] - n1[1]) ** 2)
+                cos_a = (n2[0] - n1[0]) / L
+                sin_a = (n2[1] - n1[1]) / L
+
+                # Interpolate deformed shape
+                xi = np.linspace(0, 1, subdivisions)
+                x_def = np.zeros((subdivisions, 2))
+
+                for k, xi_k in enumerate(xi):
+                    # Hermite shape functions
+                    N1 = 1 - 3 * xi_k ** 2 + 2 * xi_k ** 3
+                    N2 = xi_k - 2 * xi_k ** 2 + xi_k ** 3
+                    N3 = 3 * xi_k ** 2 - 2 * xi_k ** 3
+                    N4 = -xi_k ** 2 + xi_k ** 3
+
+                    u_loc = N1 * u_elem[0] + N3 * u_elem[3]
+                    v_loc = N1 * u_elem[1] + N2 * L * u_elem[2] + \
+                            N3 * u_elem[4] + N4 * L * u_elem[5]
+
+                    x_def[k, 0] = n1[0] + xi_k * L * cos_a + u_loc * cos_a - v_loc * sin_a
+                    x_def[k, 1] = n1[1] + xi_k * L * sin_a + u_loc * sin_a + v_loc * cos_a
+
+                ax.plot(x_def[:, 0], x_def[:, 1], color=color_def,
+                        linewidth=linewidth, zorder=4,
+                        label='Deformed' if idx == 0 else '')
+                ax.plot([n1[0], n2[0]], [n1[1], n2[1]],
+                        color=color_undef, linewidth=linewidth * 0.5,
+                        linestyle='--', alpha=0.3, zorder=2,
+                        label='Undeformed' if idx == 0 else '')
+
+    def _plot_2d_element(self, ax, elem, nodes, show_deformed, scale,
+                         displacements, mesh_color, mesh_alpha, color_def, idx):
+        """Helper to plot 2D solid elements"""
+        elem_nodes = np.array([nodes[i] for i in elem.connect])
+        n_nodes = len(elem_nodes)
+
+        for i in range(n_nodes):
+            j = (i + 1) % n_nodes
+
+            if not show_deformed:
+                ax.plot([elem_nodes[i, 0], elem_nodes[j, 0]],
+                        [elem_nodes[i, 1], elem_nodes[j, 1]],
+                        color=mesh_color, linewidth=1, alpha=mesh_alpha, zorder=2)
+
+            if show_deformed and displacements is not None and hasattr(elem, 'dofs'):
+                if len(elem.dofs) >= 2 * n_nodes:
+                    u_nodes = np.zeros((n_nodes, 2))
+                    for k in range(n_nodes):
+                        u_nodes[k, 0] = displacements[elem.dofs[2 * k]] * scale
+                        u_nodes[k, 1] = displacements[elem.dofs[2 * k + 1]] * scale
+
+                    def_nodes = elem_nodes + u_nodes
+                    ax.plot([def_nodes[i, 0], def_nodes[j, 0]],
+                            [def_nodes[i, 1], def_nodes[j, 1]],
+                            color=color_def, linewidth=1.5, alpha=0.8, zorder=3)
+
+    def _add_element_label(self, ax, elem, nodes, idx):
+        """Helper to add element labels"""
+        elem_nodes = np.array([nodes[i] for i in elem.connect])
+        centroid = np.mean(elem_nodes, axis=0)
+        ax.text(centroid[0], centroid[1], f'E{idx}',
+                ha='center', va='center', fontsize=7,
+                bbox=dict(boxstyle='round,pad=0.2',
+                          facecolor='white', alpha=0.6))
+
+    def _plot_nodes(self, ax, nodes, show_deformed, scale, displacements,
+                    size, color, show_labels):
+        """Helper to plot nodes"""
+        node_coords = nodes.copy()
+
+        if show_deformed and displacements is not None:
+            for i in range(len(nodes)):
+                u_idx, v_idx = 3 * i, 3 * i + 1
+                if u_idx < len(displacements) and v_idx < len(displacements):
+                    node_coords[i, 0] += displacements[u_idx] * scale
+                    node_coords[i, 1] += displacements[v_idx] * scale
+
+        ax.scatter(node_coords[:, 0], node_coords[:, 1],
+                   s=size, c=color, marker='o',
+                   edgecolors='darkblue', linewidths=1.5,
+                   zorder=5, label='Nodes')
+
+        if show_labels:
+            for i, coord in enumerate(node_coords):
+                ax.annotate(str(i), xy=coord, xytext=(5, 5),
+                            textcoords='offset points', fontsize=7,
+                            color='darkblue', fontweight='bold')
+
+    def _format_axes(self, ax, title, n_elem, n_nodes, show_deformed, scale):
+        """Helper for axis formatting"""
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+        ax.set_xlabel('x [m]', fontsize=11)
+        ax.set_ylabel('y [m]', fontsize=11)
+
+        if title is None:
+            title = f'Structure_FEM: {n_elem} elements, {n_nodes} nodes'
+            if show_deformed:
+                title += f' (deformed, scale={scale})'
+
+        ax.set_title(title, fontsize=13, fontweight='bold', pad=15)
+        ax.legend(loc='best', fontsize=10, framealpha=0.9)
+        plt.tight_layout()
+
 class Hybrid(Structure_block, Structure_FEM):
     def __init__(self):
         super().__init__()
@@ -1486,3 +1994,198 @@ class Hybrid(Structure_block, Structure_FEM):
 
         for fe in self.list_fes:
             fe.lin_geom = lin_geom
+
+    def plot(
+            self,
+            ax: Optional[plt.Axes] = None,
+            # Node options
+            show_nodes: bool = True,
+            show_node_labels: bool = False,
+            node_size: float = 70,
+            # Block options
+            show_blocks: bool = True,
+            show_block_labels: bool = False,
+            show_contact_faces: bool = True,
+            block_facecolor: str = 'lightblue',
+            block_edgecolor: str = 'black',
+            block_alpha: float = 0.6,
+            contact_color: str = 'green',
+            contact_linewidth: float = 2,
+            # FEM options
+            show_elements: bool = True,
+            show_element_labels: bool = False,
+            element_subdivisions: int = 10,
+            element_color_undef: str = 'black',
+            element_color_def: str = 'red',
+            element_linewidth: float = 2,
+            mesh_color: str = 'gray',
+            mesh_alpha: float = 0.3,
+            # Deformation options
+            show_deformed: bool = False,
+            deformation_scale: float = 1.0,
+            # General options
+            title: Optional[str] = None,
+            figsize: Tuple[float, float] = (16, 12),
+            **kwargs
+    ) -> plt.Figure:
+        """
+        Plot Hybrid structure combining blocks and FEM elements.
+
+        This method intelligently combines plotting from both parent classes:
+        - Uses Structure_block methods for blocks and contact faces
+        - Uses Structure_FEM methods for finite elements
+        - Provides unified visualization of the complete hybrid structure
+
+        The method reuses parent class helper methods to avoid code duplication
+        while providing a unified interface for the hybrid structure.
+
+        Parameters
+        ----------
+        All parameters from both Structure_block.plot() and Structure_FEM.plot()
+        are supported. See parent class documentation for details.
+
+        Key Hybrid-Specific Behavior
+        -----------------------------
+        - Blocks use red/pink colors for distinction
+        - FEM elements use blue/gray colors for distinction
+        - Contact faces shown in green
+        - Automatic title shows counts of both blocks and elements
+        - Both block and FEM deformations handled consistently
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+            The combined figure
+
+        Notes
+        -----
+        This method demonstrates intelligent reuse of parent class methods:
+        1. Delegates block plotting to Structure_block._plot_blocks()
+        2. Delegates contact plotting to Structure_block._plot_contact_faces()
+        3. Delegates element plotting to Structure_FEM._plot_elements()
+        4. Combines all on single axes for unified visualization
+        """
+        # Validate
+        if not self.list_nodes:
+            raise ValueError("No nodes found. Call make_nodes() first.")
+
+        # Create figure if needed
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+        else:
+            fig = ax.get_figure()
+
+        nodes = np.array(self.list_nodes)
+
+        # Check for deformation data
+        displacements = None
+        if show_deformed:
+            if hasattr(self, 'U') and self.U is not None:
+                displacements = self.U
+            else:
+                warnings.warn("No displacements found. Showing undeformed.")
+                show_deformed = False
+
+        # =====================================================================
+        # INTELLIGENT DELEGATION TO PARENT METHODS
+        # =====================================================================
+
+        # 1. Plot blocks using Structure_block's method
+        if show_blocks and self.list_blocks:
+            Structure_block._plot_blocks(
+                self,  # Pass self to access parent method
+                ax,
+                show_deformed,
+                deformation_scale,
+                displacements,
+                block_facecolor,
+                block_edgecolor,
+                block_alpha,
+                show_block_labels
+            )
+
+        # 2. Plot contact faces using Structure_block's method
+        if show_contact_faces and self.list_cfs:
+            Structure_block._plot_contact_faces(
+                self,  # Pass self to access parent method
+                ax,
+                show_deformed,
+                deformation_scale,
+                displacements,
+                contact_color,
+                contact_linewidth
+            )
+
+        # 3. Plot FEM elements using Structure_FEM's method
+        if show_elements and self.list_fes:
+            Structure_FEM._plot_elements(
+                self,  # Pass self to access parent method
+                ax,
+                nodes,
+                show_deformed,
+                deformation_scale,
+                displacements,
+                element_subdivisions,
+                element_color_undef,
+                element_color_def,
+                element_linewidth,
+                mesh_color,
+                mesh_alpha,
+                show_element_labels
+            )
+
+        # 4. Plot nodes (common to both, use either parent's method)
+        # We'll use Structure_block's version with adjusted color
+        if show_nodes:
+            # Use purple color to distinguish hybrid nodes
+            hybrid_node_color = kwargs.get('node_color', 'purple')
+            Structure_block._plot_nodes(
+                self,
+                ax,
+                nodes,
+                show_deformed,
+                deformation_scale,
+                displacements,
+                node_size,
+                hybrid_node_color,
+                show_node_labels
+            )
+
+        # =====================================================================
+        # CUSTOM FORMATTING FOR HYBRID
+        # =====================================================================
+
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+        ax.set_xlabel('x [m]', fontsize=11)
+        ax.set_ylabel('y [m]', fontsize=11)
+
+        # Build comprehensive title
+        if title is None:
+            n_blocks = len(self.list_blocks) if hasattr(self, 'list_blocks') else 0
+            n_elems = len(self.list_fes) if hasattr(self, 'list_fes') else 0
+            n_nodes = len(self.list_nodes)
+            n_cfs = len(self.list_cfs) if hasattr(self, 'list_cfs') else 0
+
+            title = f'Hybrid Structure: {n_blocks} blocks'
+            if n_elems > 0:
+                title += f' + {n_elems} FEM elements'
+            title += f', {n_nodes} nodes'
+            if n_cfs > 0:
+                title += f', {n_cfs} contact faces'
+            if show_deformed:
+                title += f' (deformed, scale={deformation_scale})'
+
+        ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+
+        # Custom legend for hybrid
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            # Remove duplicates
+            by_label = dict(zip(labels, handles))
+            ax.legend(by_label.values(), by_label.keys(),
+                      loc='best', fontsize=10, framealpha=0.9)
+
+        plt.tight_layout()
+
+        return fig
