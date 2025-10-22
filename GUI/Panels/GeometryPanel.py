@@ -64,9 +64,9 @@ class GeometryPanel(QWidget):
         self.btn_add_beam.clicked.connect(self.add_beam)
         btn_layout.addWidget(self.btn_add_beam)
 
-        self.btn_add_arch = QPushButton("Add Arch")
-        self.btn_add_arch.clicked.connect(self.add_arch)
-        btn_layout.addWidget(self.btn_add_arch)
+        self.btn_add_fem = QPushButton("Add Fem")
+        self.btn_add_fem.clicked.connect(self.add_fem)
+        btn_layout.addWidget(self.btn_add_fem)
 
         manual_layout.addLayout(btn_layout)
         manual_group.setLayout(manual_layout)
@@ -129,9 +129,9 @@ class GeometryPanel(QWidget):
         self.main_window.log_message("Add Beam dialog (to be implemented)")
         # TODO: Open dialog for beam parameters
 
-    def add_arch(self):
-        self.main_window.log_message("Add Arch dialog (to be implemented)")
-        # TODO: Open dialog for arch parameters
+    def add_fem(self):
+        self.main_window.log_message("Add Fem dialog (to be implemented)")
+        # TODO: Open dialog for fem parameters
 
     def update_geometry_info(self):
         if hasattr(self.main_window, 'structure') and self.main_window.structure:

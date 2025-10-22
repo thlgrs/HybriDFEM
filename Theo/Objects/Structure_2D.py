@@ -9,11 +9,13 @@ Created on Fri Jul 26 15:02:25 2024
 import math
 import os
 import warnings
-from typing import List, Union, Optional, Tuple
+from typing import List, Union, Optional, Tuple, Dict
 
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy as sc
+from coupling_framework.ConstitutiveCoupling import PenaltyInterface, PhysicalInterface
+from coupling_framework.CouplingFace import CouplingFace2D
 from matplotlib.patches import Polygon
 from scipy.spatial import cKDTree
 
@@ -1930,6 +1932,9 @@ class Structure_FEM(Structure_2D):
 class Hybrid(Structure_block, Structure_FEM):
     def __init__(self):
         super().__init__()
+        self.list_hybrid_cfs = []
+        self.hybrid_tolerance = 1e-6
+        self.hybrid_n_integration_points = 2
 
     @classmethod
     def from_Rhino(cls):
@@ -1952,12 +1957,411 @@ class Hybrid(Structure_block, Structure_FEM):
         self.nb_dof_fix = 0
         self.nb_dof_free = len(self.dof_free)
 
+    def detect_hybrid_interfaces(self, tolerance: Optional[float] = None, verbose: bool = True) -> List[Dict]:
+        """
+        Detect interfaces between blocks and FEM elements.
+
+        ADD THIS METHOD to your Hybrid class.
+
+        Algorithm:
+        ---------
+        1. For each block edge, check against FEM element edges
+        2. Find overlapping segments (parallel, close, overlapping extent)
+        3. Return list of detected interfaces
+
+        Parameters
+        ----------
+        tolerance : float, optional
+            Distance tolerance for interface detection
+        verbose : bool
+            Print detection information
+
+        Returns
+        -------
+        interfaces : list of dict
+            Detected interfaces with geometry information
+        """
+        if tolerance is None:
+            tolerance = getattr(self, 'hybrid_tolerance', 1e-6)
+
+        interfaces = []
+
+        # Get blocks and FEM elements from existing structure
+        blocks = getattr(self, 'list_blocks', [])
+        fem_elements = getattr(self, 'list_fes', [])
+
+        if not blocks:
+            if verbose:
+                print("Warning: No blocks found")
+            return interfaces
+
+        if not fem_elements:
+            if verbose:
+                print("Warning: No FEM elements found")
+            return interfaces
+
+        # For each block edge
+        for block in blocks:
+            block_edges = self._get_block_edges(block)
+
+            # For each FEM element edge
+            for fem_elem in fem_elements:
+                fem_edges = self._get_fem_element_edges(fem_elem)
+
+                # Check for overlap
+                for block_edge_info in block_edges:
+                    for fem_edge_info in fem_edges:
+                        overlap_info = self._check_edge_overlap(
+                            block_edge_info,
+                            fem_edge_info,
+                            tolerance
+                        )
+
+                        if overlap_info is not None:
+                            interface = {
+                                'type': 'block-fem',
+                                'block': block,
+                                'block_edge': block_edge_info,
+                                'fem_element': fem_elem,
+                                'fem_edge': fem_edge_info,
+                                'xe1': overlap_info['start'],
+                                'xe2': overlap_info['end'],
+                                'overlap_length': overlap_info['length']
+                            }
+                            interfaces.append(interface)
+
+                            if verbose:
+                                print(f"Found interface: Block {id(block)} <-> "
+                                      f"FEM {id(fem_elem)}, "
+                                      f"length = {overlap_info['length']:.4f} m")
+
+        if verbose:
+            print(f"\nTotal interfaces detected: {len(interfaces)}")
+
+        return interfaces
+
+    def _get_block_edges(self, block) -> List[Dict]:
+        """
+        Get edges of a block.
+
+        ADD THIS METHOD to your Hybrid class (helper for detect_hybrid_interfaces).
+
+        Returns edge information including vertices, normals, tangents.
+        """
+        edges = []
+
+        if not hasattr(block, 'vertices'):
+            warnings.warn(f"Block {id(block)} has no vertices attribute")
+            return edges
+
+        verts = block.vertices
+        n_verts = len(verts)
+
+        for i in range(n_verts):
+            j = (i + 1) % n_verts
+
+            start = verts[i]
+            end = verts[j]
+
+            # Edge vector
+            edge_vec = end - start
+            length = np.linalg.norm(edge_vec)
+
+            if length < 1e-10:
+                continue
+
+            # Tangent (along edge)
+            tangent = edge_vec / length
+
+            # Normal (perpendicular, outward) - CCW convention
+            normal = np.array([-tangent[1], tangent[0]])
+
+            edges.append({
+                'start': start,
+                'end': end,
+                'normal': normal,
+                'tangent': tangent,
+                'length': length
+            })
+
+        return edges
+
+    def _get_fem_element_edges(self, fem_elem) -> List[Dict]:
+        """
+        Get edges of a FEM element.
+
+        ADD THIS METHOD to your Hybrid class (helper for detect_hybrid_interfaces).
+
+        Returns edge information including node coordinates and DOF indices.
+        """
+        edges = []
+
+        if not hasattr(fem_elem, 'nodes'):
+            warnings.warn(f"FEM element {id(fem_elem)} has no nodes attribute")
+            return edges
+
+        nodes = fem_elem.nodes
+        dofs = getattr(fem_elem, 'dofs', None)
+
+        n_nodes = len(nodes)
+
+        # Determine connectivity based on element type
+        if n_nodes == 3:  # Triangle
+            edge_connectivity = [(0, 1), (1, 2), (2, 0)]
+        elif n_nodes == 4:  # Quadrilateral
+            edge_connectivity = [(0, 1), (1, 2), (2, 3), (3, 0)]
+        else:
+            warnings.warn(f"Unsupported FEM element with {n_nodes} nodes")
+            return edges
+
+        for (i, j) in edge_connectivity:
+            start = np.array(nodes[i])
+            end = np.array(nodes[j])
+
+            edge_vec = end - start
+            length = np.linalg.norm(edge_vec)
+
+            if length < 1e-10:
+                continue
+
+            tangent = edge_vec / length
+
+            # DOF indices for this edge
+            if dofs is not None:
+                edge_dofs = [dofs[2 * i], dofs[2 * i + 1], dofs[2 * j], dofs[2 * j + 1]]
+            else:
+                edge_dofs = [2 * i, 2 * i + 1, 2 * j, 2 * j + 1]
+
+            edges.append({
+                'nodes': [start, end],
+                'dof_indices': edge_dofs,
+                'start': start,
+                'end': end,
+                'tangent': tangent,
+                'length': length
+            })
+
+        return edges
+
+    def _check_edge_overlap(self, block_edge: Dict, fem_edge: Dict, tolerance: float) -> Optional[Dict]:
+        """
+        Check if block edge and FEM edge overlap.
+
+        ADD THIS METHOD to your Hybrid class (helper for detect_hybrid_interfaces).
+
+        Checks:
+        1. Parallel (tangent vectors aligned)
+        2. Close (perpendicular distance < tolerance)
+        3. Overlapping extent (project and find intersection)
+
+        Returns overlap geometry if overlap exists, None otherwise.
+        """
+        t1 = block_edge['tangent']
+        t2 = fem_edge['tangent']
+
+        # Check if parallel
+        dot_product = np.abs(np.dot(t1, t2))
+        if dot_product < 0.99:  # Not parallel
+            return None
+
+        # Check if close
+        p1 = block_edge['start']
+        p2 = fem_edge['start']
+        n1 = block_edge['normal']
+
+        distance = np.abs(np.dot(n1, p2 - p1))
+        if distance > tolerance:
+            return None
+
+        # Find overlap by projecting onto common axis
+        axis = t1
+
+        # Block edge projection
+        b_start = np.dot(block_edge['start'], axis)
+        b_end = np.dot(block_edge['end'], axis)
+        b_min, b_max = min(b_start, b_end), max(b_start, b_end)
+
+        # FEM edge projection
+        f_start = np.dot(fem_edge['start'], axis)
+        f_end = np.dot(fem_edge['end'], axis)
+        f_min, f_max = min(f_start, f_end), max(f_start, f_end)
+
+        # Overlap interval
+        overlap_min = max(b_min, f_min)
+        overlap_max = min(b_max, f_max)
+
+        if overlap_max <= overlap_min + 1e-10:
+            return None
+
+        # Reconstruct physical coordinates
+        origin = block_edge['start']
+        overlap_start = origin + (overlap_min - b_start) * axis
+        overlap_end = origin + (overlap_max - b_start) * axis
+        overlap_length = overlap_max - overlap_min
+
+        return {
+            'start': overlap_start,
+            'end': overlap_end,
+            'length': overlap_length
+        }
+
+    def make_hybrid_couplings(self, n_integration_points: Optional[int] = None, coupling_type: str = 'penalty',
+                              auto_detect: bool = True, interfaces: Optional[List[Dict]] = None, **coupling_params):
+        """
+        Create hybrid coupling faces between blocks and FEM.
+
+        ADD THIS METHOD to your Hybrid class.
+
+        This is the main method to set up block-FEM coupling!
+
+        Parameters
+        ----------
+        n_integration_points : int, optional
+            Number of integration points per interface
+        coupling_type : str
+            'penalty' or 'interface'
+        auto_detect : bool
+            Automatically detect interfaces
+        interfaces : list, optional
+            Pre-detected interfaces
+        **coupling_params :
+            For penalty: k_penalty
+            For interface: contact_law
+
+        Returns
+        -------
+        n_couplings : int
+            Number of coupling faces created
+        """
+        if n_integration_points is None:
+            n_integration_points = getattr(self, 'hybrid_n_integration_points', 2)
+
+        # Detect or use provided interfaces
+        if auto_detect:
+            interfaces = self.detect_hybrid_interfaces(verbose=True)
+        elif interfaces is None:
+            raise ValueError("Must provide interfaces if auto_detect=False")
+
+        if not interfaces:
+            print("Warning: No interfaces found - no couplings created")
+            return 0
+
+        # Create coupling model
+        coupling_model = self._create_coupling_model(coupling_type, coupling_params)
+
+        # Create coupling faces
+        self.list_hybrid_cfs = []
+
+        for interface in interfaces:
+            # Get thickness from block
+            block = interface['block']
+            b = getattr(block, 'b', 1.0)
+
+            # Create coupling face
+            cf = CouplingFace2D(
+                xe1=interface['xe1'],
+                xe2=interface['xe2'],
+                side_A=interface['block'],
+                side_B=interface['fem_edge'],
+                n_integration_points=n_integration_points,
+                coupling_model=coupling_model,
+                lin_geom=getattr(self, 'lin_geom', True),
+                b=b
+            )
+
+            self.list_hybrid_cfs.append(cf)
+
+        n_couplings = len(self.list_hybrid_cfs)
+        print(f"\n{'=' * 70}")
+        print(f"Created {n_couplings} hybrid coupling faces")
+        print(f"  Integration points per face: {n_integration_points}")
+        print(f"  Coupling type: {coupling_type}")
+        print(f"{'=' * 70}\n")
+
+        return n_couplings
+
+    def _create_coupling_model(self, coupling_type: str, params: Dict):
+        """
+        Create coupling model based on type.
+
+        ADD THIS METHOD to your Hybrid class (helper for make_hybrid_couplings).
+        """
+        if coupling_type == 'penalty':
+            k_p = params.get('k_penalty', 1e13)
+
+            # Auto-estimate if requested
+            if k_p == 'auto' and hasattr(self, 'K'):
+                k_max = np.max(np.abs(np.diag(self.K)))
+                k_p = 1e4 * k_max
+                print(f"Auto-estimated penalty: k_p = {k_p:.2e} N/m³")
+
+            model = PenaltyInterface(k_p)
+
+        elif coupling_type == 'interface':
+            contact_law = params.get('contact_law')
+            if contact_law is None:
+                raise ValueError("Must provide contact_law for interface coupling")
+
+            model = PhysicalInterface(contact_law)
+
+        else:
+            raise ValueError(f"Unknown coupling type: {coupling_type}")
+
+        return model
+
+    def commit_hybrid(self):
+        """
+        Commit hybrid coupling state.
+
+        ADD THIS METHOD to your Hybrid class.
+
+        Call when a load step converges (in your commit() method).
+        """
+        if hasattr(self, 'list_hybrid_cfs'):
+            for cf in self.list_hybrid_cfs:
+                cf.commit()
+
+    def revert_hybrid(self):
+        """
+        Revert hybrid coupling state.
+
+        ADD THIS METHOD to your Hybrid class.
+
+        Call when a load step fails (in your revert_commit() method).
+        """
+        if hasattr(self, 'list_hybrid_cfs'):
+            for cf in self.list_hybrid_cfs:
+                cf.revert_commit()
+
+    def _get_P_r_hybrid(self):
+        """
+        Add hybrid coupling forces to residual.
+        """
+        if not hasattr(self, 'list_hybrid_cfs'):
+            return
+
+        if not hasattr(self, 'P_r'):
+            raise RuntimeError("Residual P_r not initialized")
+
+        if not hasattr(self, 'U'):
+            warnings.warn("Displacement U not found - cannot compute coupling forces")
+            return
+
+        for cf in self.list_hybrid_cfs:
+            f_cf, dof_indices = cf.get_pf_glob(self.U)
+
+            if f_cf is not None:
+                dof_array = np.array(dof_indices)
+                self.P_r[dof_array] += f_cf
+
     def get_P_r(self):
         self.dofs_defined()
         self.P_r = np.zeros(self.nb_dofs, dtype=float)
 
         self._get_P_r_block()
         self._get_P_r_fem()
+        self._get_P_r_hybrid()
+        return self.P_r
 
     def get_M_str(self, no_inertia: bool = False):
         self.dofs_defined()
@@ -1967,11 +2371,29 @@ class Hybrid(Structure_block, Structure_FEM):
         self._mass_fem(no_inertia=no_inertia)
         return self.M
 
+    def _stiffness_hybrid(self):
+        """
+        Add hybrid coupling stiffness to global matrix.
+        """
+        if not hasattr(self, 'list_hybrid_cfs'):
+            return
+
+        if not hasattr(self, 'K'):
+            raise RuntimeError("Global stiffness K not initialized")
+
+        for cf in self.list_hybrid_cfs:
+            K_cf, dof_indices = cf.get_kf_glob(getattr(self, 'U', None))
+
+            if K_cf is not None:
+                dof_array = np.array(dof_indices)
+                self.K[np.ix_(dof_array, dof_array)] += K_cf
+
     def get_K_str(self):
         self.dofs_defined()
         self.K = np.zeros((self.nb_dofs, self.nb_dofs), dtype=float)
         self._stiffness_block()
         self._stiffness_fem()
+        self._stiffness_hybrid()
         return self.K
 
     def get_K_str0(self):
@@ -2189,3 +2611,8 @@ class Hybrid(Structure_block, Structure_FEM):
         plt.tight_layout()
 
         return fig
+
+
+my_struct = Hybrid()
+
+mY_stuct.
