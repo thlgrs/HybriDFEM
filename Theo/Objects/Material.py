@@ -23,6 +23,54 @@ def custom_warning_format(message, category, filename, lineno, file=None, line=N
 warnings.formatwarning = custom_warning_format
 
 
+class Material_FE(ABC):
+    """
+    Base class for 2D materials.
+    Subclasses must define the constitutive matrix D (3x3)
+    and the density rho for mass computation.
+    """
+
+    def __init__(self, E: float, nu: float, rho: float):
+        self.E = E  # Young's modulus
+        self.nu = nu  # Poisson's ratio
+        self.rho = rho  # Density
+
+    def D(self) -> Array:
+        """Return constitutive matrix (to be implemented by subclasses)."""
+        raise NotImplementedError("Subclasses must implement D property.")
+
+
+class PlaneStress(Material_FE):
+    """
+    Isotropic linear elastic material in plane stress conditions.
+    """
+
+    @property
+    def D(self) -> Array:
+        E, nu = self.E, self.nu
+        c = E / (1 - nu ** 2)
+        return c * np.array([
+            [1, nu, 0],
+            [nu, 1, 0],
+            [0, 0, (1 - nu) / 2]
+        ])
+
+
+class PlaneStrain(Material_FE):
+    """
+    Isotropic linear elastic material in plane strain conditions.
+    """
+
+    @property
+    def D(self) -> Array:
+        E, nu = self.E, self.nu
+        c = E * (1 - nu) / ((1 + nu) * (1 - 2 * nu))
+        return c * np.array([
+            [1, nu / (1 - nu), 0],
+            [nu / (1 - nu), 1, 0],
+            [0, 0, (1 - 2 * nu) / (2 * (1 - nu))]
+        ])
+
 class Material:
 
     def __init__(self, E, nu, corr_fact=1, shear_def=True):

@@ -13,23 +13,19 @@ __pycache__/
 venv/
 env/
 
-# Environment variable files
 .env
 
-# Logs
 *.log
 
-# png
 *.png
 
-# eps
 *.eps
+
+*.md
 
 # IDE files and folders
 .vscode/
 
 Depreciated
-
-Legacy/Examples
 
 Theo/Tests/Outputs

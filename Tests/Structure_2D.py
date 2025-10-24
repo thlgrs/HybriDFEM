@@ -71,7 +71,7 @@ def example_1_structure_block():
     # Assemble and solve
     print("\nSolving...")
     # Static.solve_linear(structure)
-    Static.solve_forcecontrol(structure, 10, filename="Theo/Tests/Outputs/force_control.h5")
+    Static.solve_forcecontrol(structure, 10, filename="Tests/Outputs/force_control.h5")
 
     print("✓ Solution converged")
     print(structure.get_M_str())

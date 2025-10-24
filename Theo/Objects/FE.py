@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import meshio
 import numpy as np
 from matplotlib.collections import LineCollection
-
+from Material import Material_FE
 Array = np.ndarray
 
 
@@ -198,53 +198,6 @@ class FE_Mesh:
         else:
             plt.show()
 
-class Material(ABC):
-    """
-    Base class for 2D materials.
-    Subclasses must define the constitutive matrix D (3x3)
-    and the density rho for mass computation.
-    """
-
-    def __init__(self, E: float, nu: float, rho: float):
-        self.E = E  # Young's modulus
-        self.nu = nu  # Poisson's ratio
-        self.rho = rho  # Density
-
-
-    def D(self) -> Array:
-        """Return constitutive matrix (to be implemented by subclasses)."""
-        raise NotImplementedError("Subclasses must implement D property.")
-
-class PlaneStress(Material):
-    """
-    Isotropic linear elastic material in plane stress conditions.
-    """
-
-    @property
-    def D(self) -> Array:
-        E, nu = self.E, self.nu
-        c = E / (1 - nu ** 2)
-        return c * np.array([
-            [1, nu, 0],
-            [nu, 1, 0],
-            [0, 0, (1 - nu) / 2]
-        ])
-
-class PlaneStrain(Material):
-    """
-    Isotropic linear elastic material in plane strain conditions.
-    """
-
-    @property
-    def D(self) -> Array:
-        E, nu = self.E, self.nu
-        c = E * (1 - nu) / ((1 + nu) * (1 - 2 * nu))
-        return c * np.array([
-            [1, nu / (1 - nu), 0],
-            [nu / (1 - nu), 1, 0],
-            [0, 0, (1 - 2 * nu) / (2 * (1 - nu))]
-        ])
-
 @dataclass
 class QuadRule:
     # tensor-product rule on [-1,1]x[-1,1]
@@ -288,7 +241,7 @@ class FE(ABC):
         pass
 
 class Timoshenko(FE):
-    def __init__(self, nodes, mat: Material, geom):
+    def __init__(self, nodes, mat: Material_FE, geom):
         super().__init__(nodes, np.zeros(6, dtype=int))
         self.N1 = nodes[0]
         self.N2 = nodes[1]
@@ -634,10 +587,6 @@ class Element2D(FE):
     def __init__(self, nodes: List[Tuple[float, float]], mat, geom: Geometry2D):
         """
         Initialize 2D finite element.
-
-        CHANGES FROM ORIGINAL:
-        - Added rotation_dofs initialization (was missing)
-        - Changed geom type hint to Geometry2D
         """
         self.t = float(geom.t)
         self.mat = mat
@@ -877,7 +826,6 @@ class Q9(Element2D):
         qr = self.gauss_3x3()
         return qr.xi, qr.eta, qr.w
 
-
 class T3(Element2D):
     # Constant Strain Triangle T3
     def N_dN(self, xi, eta):
@@ -918,7 +866,6 @@ class T3(Element2D):
         Me[0::2, 0::2] = Msc
         Me[1::2, 1::2] = Msc
         return Me
-
 
 class T6(Element2D):
     # Linear Strain Triangle T6
