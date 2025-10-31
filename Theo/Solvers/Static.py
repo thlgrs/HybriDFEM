@@ -2,6 +2,7 @@ import time
 from copy import deepcopy
 
 import h5py
+import scipy as sc
 
 from Theo.Structures.Structure_2D import *
 
@@ -216,11 +217,12 @@ class Static:
         res_counter = np.zeros(nb_steps)
         last_conv = 0
         if isinstance(node, int):
-            control_dof = [3 * node + dof]
+            # Use variable DOF system: node_dof_offsets instead of 3*node
+            control_dof = [structure._global_dof(node, dof)]
         elif isinstance(node, list):
             control_dof = []
             for n in node:
-                control_dof.append(3 * n + dof)
+                control_dof.append(structure._global_dof(n, dof))
         other_dofs = structure.dof_free[structure.dof_free != control_dof]
 
         structure.list_norm_res = [[] for _ in range(nb_steps)]

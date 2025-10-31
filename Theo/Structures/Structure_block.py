@@ -50,7 +50,7 @@ class Structure_block(Structure_2D):
     def add_block(self, ref_point, l, h, b=1, material=None):
         xc, yc = ref_point
         dx, dy = l / 2, h / 2
-        vertices = [(xc - dx, yc - dy), (xc + dx, yc - dy), (xc + dx, yc + dy), (xc - dx, yc + dy)]
+        vertices = np.array([(xc - dx, yc - dy), (xc + dx, yc - dy), (xc + dx, yc + dy), (xc - dx, yc + dy)])
         block = Block_2D(vertices, b=b, material=material)
         self.list_blocks.append(block)
 
