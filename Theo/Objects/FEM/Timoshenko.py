@@ -264,11 +264,12 @@ class Timoshenko(FE):
 
         self.p_glob = np.zeros(6)
 
-        self.q_loc = self.r_C @ self.q_glob
+        r_C = self.r_C(self.alpha)
+        self.q_loc = r_C @ self.q_glob
 
         self.get_p_loc()
 
-        self.p_glob = np.transpose(self.r_C) @ self.p_loc
+        self.p_glob = np.transpose(r_C) @ self.p_loc
 
         return self.p_glob
 
@@ -353,7 +354,8 @@ class Timoshenko(FE):
     def PlotDefShapeElem(self, defs, scale=1):
         disc = 100
 
-        defs_loc = self.r_C @ defs
+        r_C = self.r_C(self.alpha)
+        defs_loc = r_C @ defs
 
         x_loc = np.linspace(0, self.L, disc)
         y_loc = np.zeros(disc)

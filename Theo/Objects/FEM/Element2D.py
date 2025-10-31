@@ -207,13 +207,17 @@ class Element2D(FE):
         return self.Ke()
 
     def get_k_glob0(self):
-        pass
+        # For linear elements, K0 = K (no geometric nonlinearity)
+        return self.Ke()
 
     def get_k_glob_LG(self):
-        pass
+        # For linear elements, geometric stiffness not implemented
+        return np.zeros((self.edof, self.edof))
 
     def get_p_glob(self, q_glob):
-        pass
+        # Internal force vector: F = K * u
+        K = self.get_k_glob()
+        return K @ q_glob
 
 
 class Triangle(Element2D):
