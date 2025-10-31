@@ -214,7 +214,7 @@ def example_3_hybrid():
     print(f"Material: E={E_found / 1e9:.0f} GPa, ν={nu_found}, ρ={rho_found} kg/m³")
 
     # Create foundation mesh
-    # mesh_found = FE_Mesh(
+    # mesh_found = Mesh(
     #     points=[
     #         (0, 0),
     #         (L_found, 0),
@@ -501,7 +501,7 @@ Static.solve_linear(structure)
 Use when: Modeling continuous structures with finite elements
 
 from Theo.Objects.Structure_2D import Structure_FEM
-from Theo.Objects.FE import Timoshenko, FE_Mesh, PlaneStress, Geometry2D
+from Theo.Objects.FE import Timoshenko, Mesh, PlaneStress, Geometry2D
 
 # Initialize
 structure = Structure_FEM()
@@ -510,7 +510,7 @@ structure = Structure_FEM()
 structure.add_fe([N1, N2], material, geometry)
 
 # Method B: Create from mesh
-mesh = FE_Mesh(
+mesh = Mesh(
     points=[(0,0), (1,0), (1,1), (0,1)],
     element_type='triangle',
     element_size=0.1,

@@ -12,7 +12,7 @@ from warnings import warn
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .Material import Material
+from Theo.Objects.Material.Material import Material
 
 
 def custom_warning_format(message, category, filename, lineno, file=None, line=None):
@@ -24,7 +24,9 @@ warnings.formatwarning = custom_warning_format
 
 
 class Block_2D:
-    def __init__(self, vertices, rho, b=1, material: Material = None, ref_point=None):
+    DOFS_PER_NODE = 3  # Rigid blocks: [ux, uy, rotation_z]
+
+    def __init__(self, vertices, b=1, material: Material = None, ref_point=None):
         # Initializing attributes of block
         self.connect = None
         self.dofs = np.zeros(3)
@@ -35,7 +37,7 @@ class Block_2D:
 
         self.v = vertices.copy()
         self.nb_vertices = len(vertices)
-        self.rho = rho
+        self.rho = material.rho
 
         self.b = b
         self.cfs = []
@@ -43,6 +45,9 @@ class Block_2D:
         # if not material: warn("Warning: Block was defined without material model")
 
         self.material = material
+
+        # Coupling support: track which DOFs are fixed (for FEM-Block coupling)
+        self.fixed_dofs = []  # List of fixed DOF indices (0=u, 1=v, 2=θ)
 
         # Computing center of gravity, area, mass and rotational inertia w.r.t ref point
         self.get_area()
@@ -59,9 +64,30 @@ class Block_2D:
             warn("Careful, the block is not a valid polygon", UserWarning)
         self.get_min_circle()
 
-    def make_connect(self, index):
+    def make_connect(self, index, structure=None):
+        """
+        Set connection to global node index and compute DOF mapping.
+
+        This method now supports variable DOFs per node:
+        - If structure provided: uses structure.node_dof_offsets (flexible DOF system)
+        - If structure=None: falls back to 3*index (backward compatibility)
+
+        Args:
+            index: Global node index in Structure_2D
+            structure: Structure_2D instance (optional, for flexible DOF support)
+        """
         self.connect = index
-        self.dofs = np.arange(3) + 3 * index * np.ones(3, dtype=int)
+
+        # Compute base DOF index for this node
+        if structure is not None and hasattr(structure, 'node_dof_offsets') and len(structure.node_dof_offsets) > index:
+            # Variable DOF mode: use node_dof_offsets
+            base_dof = structure.node_dof_offsets[index]
+        else:
+            # Fallback: assume 3 DOFs per node
+            base_dof = 3 * index
+
+        # Map block DOFs (3: ux, uy, rz) to global structure DOFs
+        self.dofs = np.arange(3, dtype=int) + base_dof
 
     def get_area(self):
         for i in range(self.nb_vertices - 1):
@@ -459,3 +485,207 @@ class Block_2D:
 
         plt.axis("equal")
         plt.axis("off")
+
+    # ========================================================================
+    # COUPLING METHODS (for FEM-Block Hybrid Coupling)
+    # ========================================================================
+
+    def set_fixed(self, dofs='all'):
+        """
+        Fix specific DOFs of the rigid block for coupling purposes.
+
+        This method is used when coupling blocks with FEM elements to specify
+        which degrees of freedom should be constrained.
+
+        Parameters
+        ----------
+        dofs : str or list
+            Specification of which DOFs to fix:
+            - 'all': Fix all DOFs (u, v, θ)
+            - 'horizontal': Fix u and θ only
+            - 'vertical': Fix v only
+            - 'rotation': Fix θ only
+            - list: List of DOF indices [0=u, 1=v, 2=θ] to fix
+
+        Examples
+        --------
+        >>> block.set_fixed('all')  # Fix completely
+        >>> block.set_fixed([0, 1])  # Fix translations only
+        >>> block.set_fixed('vertical')  # Allow horizontal sliding and rotation
+        """
+        if dofs == 'all':
+            self.fixed_dofs = [0, 1, 2]
+        elif dofs == 'horizontal':
+            self.fixed_dofs = [0, 2]  # Fix u and θ
+        elif dofs == 'vertical':
+            self.fixed_dofs = [1]  # Fix v only
+        elif dofs == 'rotation':
+            self.fixed_dofs = [2]  # Fix θ only
+        elif isinstance(dofs, list):
+            self.fixed_dofs = dofs
+        else:
+            self.fixed_dofs = []
+
+    def get_free_dofs(self):
+        """
+        Get list of free (unconstrained) DOF indices.
+
+        Returns
+        -------
+        list
+            Sorted list of free DOF indices from {0, 1, 2}
+
+        Examples
+        --------
+        >>> block.set_fixed([0, 2])
+        >>> block.get_free_dofs()
+        [1]
+        """
+        all_dofs = {0, 1, 2}
+        return sorted(list(all_dofs - set(self.fixed_dofs)))
+
+    def is_fully_fixed(self):
+        """
+        Check if all DOFs are fixed.
+
+        Returns
+        -------
+        bool
+            True if all three DOFs are constrained
+
+        Examples
+        --------
+        >>> block.set_fixed('all')
+        >>> block.is_fully_fixed()
+        True
+        """
+        return len(self.fixed_dofs) == 3
+
+    def displacement_at_point(self, point, displacements=None):
+        """
+        Compute displacement at any point using rigid body kinematics.
+
+        Uses small angle approximation for rotation:
+        u = u_block - (y - y_ref) * θ
+        v = v_block + (x - x_ref) * θ
+
+        Parameters
+        ----------
+        point : array-like
+            [x, y] coordinates of the point in global frame
+        displacements : array-like, optional
+            [u, v, θ] block displacements. If None, uses self.disps
+
+        Returns
+        -------
+        np.ndarray
+            [u, v] displacement at the point
+
+        Examples
+        --------
+        >>> block.disps = np.array([0.1, 0.2, 0.01])  # u, v, θ
+        >>> u_point = block.displacement_at_point([1.0, 2.0])
+        """
+        if displacements is None:
+            u_b, v_b, theta = self.disps
+        else:
+            u_b, v_b, theta = displacements
+
+        x, y = point
+        x_c, y_c = self.ref_point
+
+        # Small angle approximation (linear kinematics)
+        u = u_b - (y - y_c) * theta
+        v = v_b + (x - x_c) * theta
+
+        return np.array([u, v])
+
+    def constraint_matrix_for_node(self, node_position):
+        """
+        Get constraint matrix for coupling a node to this rigid block.
+
+        Returns the 2×3 matrix C such that:
+            [u_node, v_node]^T = C * [u_block, v_block, θ_block]^T
+
+        This enforces kinematic compatibility between the rigid block motion
+        and a node on a deformable FEM element.
+
+        Parameters
+        ----------
+        node_position : array-like
+            [x, y] coordinates of the node to couple
+
+        Returns
+        -------
+        np.ndarray
+            2×3 constraint matrix
+
+        Examples
+        --------
+        >>> block = Block_2D(vertices)
+        >>> C = block.constraint_matrix_for_node([1.0, 2.0])
+        >>> u_node = C @ np.array([u_block, v_block, theta_block])
+
+        Notes
+        -----
+        The constraint matrix is derived from rigid body kinematics:
+            C = [[1,  0,  -(y-y_ref)],
+                 [0,  1,   (x-x_ref)]]
+        """
+        x, y = node_position
+        x_c, y_c = self.ref_point
+
+        # Rigid body kinematics constraint matrix
+        # u_node = u_b - (y - y_c) * θ
+        # v_node = v_b + (x - x_c) * θ
+
+        C = np.array([
+            [1, 0, -(y - y_c)],
+            [0, 1, (x - x_c)]
+        ])
+
+        return C
+
+    def compute_resultant_force_moment(self, nodal_forces, nodal_positions):
+        """
+        Compute resultant force and moment on the rigid block from nodal forces.
+
+        This method is used in FEM-Block coupling to compute how forces from
+        FEM elements are transferred to the rigid block through interface nodes.
+
+        Parameters
+        ----------
+        nodal_forces : np.ndarray
+            Array of shape (n_nodes, 2) containing [Fx, Fy] at each interface node
+        nodal_positions : np.ndarray
+            Array of shape (n_nodes, 2) containing [x, y] coordinates of each interface node
+
+        Returns
+        -------
+        F_resultant : np.ndarray
+            Resultant force vector [Fx, Fy] on the block
+        M_resultant : float
+            Resultant moment about the reference point
+
+        Examples
+        --------
+        >>> nodal_forces = np.array([[10.0, 20.0], [5.0, -10.0]])
+        >>> nodal_positions = np.array([[1.0, 0.0], [2.0, 0.0]])
+        >>> F, M = block.compute_resultant_force_moment(nodal_forces, nodal_positions)
+
+        Notes
+        -----
+        Moment is computed about the block's reference point using:
+            M = Σ [(x_i - x_ref) * F_y,i - (y_i - y_ref) * F_x,i]
+        """
+        # Sum all forces for resultant force
+        F_resultant = np.sum(nodal_forces, axis=0)
+
+        # Compute moment about reference point
+        M_resultant = 0.0
+        for i in range(len(nodal_forces)):
+            r = nodal_positions[i] - self.ref_point  # Lever arm
+            # M = r × F (2D cross product: r_x * F_y - r_y * F_x)
+            M_resultant += r[0] * nodal_forces[i, 1] - r[1] * nodal_forces[i, 0]
+
+        return F_resultant, M_resultant
